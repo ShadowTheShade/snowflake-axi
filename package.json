@@ -1,0 +1,31 @@
+{
+  "name": "snowflake-axi",
+  "version": "0.1.0",
+  "description": "Read-only Snowflake explorer for agents; TOON output, SELECT-only",
+  "license": "UNLICENSED",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "snowflake-axi": "dist/bin/snowflake-axi.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build && npm test"
+  },
+  "dependencies": {
+    "axi-sdk-js": "^0.1.8",
+    "snowflake-sdk": "^3.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.5.0",
+    "vitest": "^3.0.0"
+  }
+}

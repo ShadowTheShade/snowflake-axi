@@ -1,0 +1,6 @@
+HANDOFF.md
+PROPOSAL.md
+reference/
+.env
+node_modules/
+dist/
