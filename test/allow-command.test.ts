@@ -26,13 +26,17 @@ afterEach(() => {
 describe("allow command", () => {
   it("lists capabilities with their granted status", async () => {
     const output = (await allowCommand.run([])) as Record<string, unknown>;
-    expect(output.capabilities).toEqual([expect.objectContaining({ capability: "dbt.execute", granted: false })]);
+    expect(output.capabilities).toEqual([
+      expect.objectContaining({ capability: "dbt.execute", granted: false }),
+      expect.objectContaining({ capability: "dbt.deploy", granted: false }),
+      expect.objectContaining({ capability: "git.fetch", granted: false }),
+    ]);
   });
 
   it("rejects unknown capabilities listing the valid ones", async () => {
     await expect(allowCommand.run(["dbt.destroy"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
-      suggestions: ["Valid capabilities: dbt.execute"],
+      suggestions: ["Valid capabilities: dbt.execute, dbt.deploy, git.fetch"],
     });
   });
 

@@ -27,6 +27,9 @@ const PROJECT_ROW = {
 
 const OTHER_ROW = { ...PROJECT_ROW, name: "MY_PROJECT_DEV", schema_name: "DEV" };
 
+// A project whose current version was deployed from a git repository stage.
+const GIT_ROW = { ...PROJECT_ROW, default_version_source_location_uri: "@STITCH_DB.PUBLIC.MY_REPO/branches/main" };
+
 beforeEach(() => {
   runQuery.mockReset();
   requireGrant.mockReset();
@@ -196,5 +199,113 @@ describe("dbt execute", () => {
     await expect(dbtCommand.run(["execute", "ghost", "--args", "build"])).rejects.toMatchObject({
       code: "NOT_FOUND",
     });
+  });
+});
+
+describe("dbt deploy", () => {
+  function mockDeploySequence(versions: Record<string, unknown>[], project = GIT_ROW) {
+    runQuery
+      .mockResolvedValueOnce({ rows: [project], total: 1 }) // findProject
+      .mockResolvedValueOnce({ rows: [], total: 0 }) // FETCH
+      .mockResolvedValueOnce({ rows: [{ name: "dbt_project.yml" }], total: 1 }) // LIST
+      .mockResolvedValueOnce({ rows: [], total: 0 }) // ADD VERSION
+      .mockResolvedValueOnce({ rows: versions, total: versions.length }); // SHOW VERSIONS
+  }
+
+  it("checks the write grant before anything else", async () => {
+    requireGrant.mockImplementation(() => {
+      throw Object.assign(new Error("Write capability 'dbt.deploy' is not granted"), { code: "WRITE_NOT_ALLOWED" });
+    });
+    await expect(dbtCommand.run(["deploy", "my_project"])).rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
+    expect(requireGrant).toHaveBeenCalledWith("dbt.deploy");
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("fetches, verifies dbt_project.yml, adds a version, and reports it", async () => {
+    mockDeploySequence([
+      { name: "VERSION$1", is_last: "false", is_default: "false" },
+      { name: "VERSION$2", is_last: "true", is_default: "true", git_commit_hash: "abcdef1234567890" },
+    ]);
+    const output = (await dbtCommand.run(["deploy", "my_project"])) as Record<string, unknown>;
+    expect(runQuery.mock.calls[1][0]).toBe("ALTER GIT REPOSITORY STITCH_DB.PUBLIC.MY_REPO FETCH");
+    expect(runQuery.mock.calls[2][0]).toBe("LIST @STITCH_DB.PUBLIC.MY_REPO/branches/main/dbt_project.yml");
+    expect(runQuery.mock.calls[3][0]).toBe(
+      "ALTER DBT PROJECT STITCH_DB.METRICS.MY_PROJECT ADD VERSION FROM '@STITCH_DB.PUBLIC.MY_REPO/branches/main'",
+    );
+    expect(runQuery.mock.calls[4][0]).toBe("SHOW VERSIONS IN DBT PROJECT STITCH_DB.METRICS.MY_PROJECT");
+    expect(output).toMatchObject({
+      project: "STITCH_DB.METRICS.MY_PROJECT",
+      deployed_from: "@STITCH_DB.PUBLIC.MY_REPO/branches/main",
+      version: "VERSION$2",
+      commit: "abcdef123456",
+      is_default: true,
+    });
+  });
+
+  it("overrides the inferred source with --repo, --branch, and --path", async () => {
+    mockDeploySequence([{ name: "VERSION$3", is_last: "true", is_default: "true" }]);
+    await dbtCommand.run([
+      "deploy",
+      "my_project",
+      "--repo",
+      "other_db.public.repo",
+      "--branch",
+      "dev",
+      "--path",
+      "analytics",
+    ]);
+    expect(runQuery.mock.calls[1][0]).toBe("ALTER GIT REPOSITORY OTHER_DB.PUBLIC.REPO FETCH");
+    expect(runQuery.mock.calls[2][0]).toBe("LIST @OTHER_DB.PUBLIC.REPO/branches/dev/analytics/dbt_project.yml");
+    expect(runQuery.mock.calls[3][0]).toBe(
+      "ALTER DBT PROJECT STITCH_DB.METRICS.MY_PROJECT ADD VERSION FROM '@OTHER_DB.PUBLIC.REPO/branches/dev/analytics'",
+    );
+  });
+
+  it("skips the fetch with --no-fetch", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [GIT_ROW], total: 1 })
+      .mockResolvedValueOnce({ rows: [{ name: "dbt_project.yml" }], total: 1 })
+      .mockResolvedValueOnce({ rows: [], total: 0 })
+      .mockResolvedValueOnce({ rows: [{ name: "VERSION$2", is_last: "true" }], total: 1 });
+    await dbtCommand.run(["deploy", "my_project", "--no-fetch"]);
+    expect(runQuery).toHaveBeenCalledTimes(4);
+    expect(runQuery.mock.calls.some((call) => String(call[0]).includes("ALTER GIT REPOSITORY"))).toBe(false);
+    expect(runQuery.mock.calls[1][0]).toBe("LIST @STITCH_DB.PUBLIC.MY_REPO/branches/main/dbt_project.yml");
+  });
+
+  it("threads --role through the lookup and every write", async () => {
+    mockDeploySequence([{ name: "VERSION$2", is_last: "true" }]);
+    await dbtCommand.run(["deploy", "my_project", "--role", "ANALYTICS_ROLE"]);
+    expect(runQuery.mock.calls[0][1]).toEqual({ role: "ANALYTICS_ROLE" });
+    expect(runQuery.mock.calls[1][1]).toEqual({ role: "ANALYTICS_ROLE", timeoutSeconds: 600 });
+    expect(runQuery.mock.calls[2][1]).toEqual({ role: "ANALYTICS_ROLE" });
+    expect(runQuery.mock.calls[3][1]).toEqual({ role: "ANALYTICS_ROLE", timeoutSeconds: 600 });
+    expect(runQuery.mock.calls[4][1]).toEqual({ role: "ANALYTICS_ROLE" });
+  });
+
+  it("fails loud when the git path has no dbt_project.yml", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [GIT_ROW], total: 1 })
+      .mockResolvedValueOnce({ rows: [], total: 0 })
+      .mockResolvedValueOnce({ rows: [], total: 0 });
+    await expect(dbtCommand.run(["deploy", "my_project"])).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(runQuery).toHaveBeenCalledTimes(3);
+  });
+
+  it("refuses a project whose source is not git without flags", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW], total: 1 });
+    await expect(dbtCommand.run(["deploy", "my_project"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("errors on ambiguous names before writing", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [GIT_ROW, OTHER_ROW], total: 2 });
+    await expect(dbtCommand.run(["deploy", "usage"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("errors when no project matches", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    await expect(dbtCommand.run(["deploy", "ghost"])).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
 });

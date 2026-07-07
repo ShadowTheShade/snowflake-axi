@@ -34,6 +34,10 @@ snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
 snowflake-axi dbt describe MY_PROJECT       # versions, source, target, integrations
 snowflake-axi dbt execute MY_PROJECT --args "build"   # write: locked until the user grants it
+snowflake-axi dbt deploy MY_PROJECT --branch main     # write: cut a new version from git, locked until granted
+snowflake-axi git                           # git repositories on Snowflake, account-wide
+snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO    # branches with commit hashes
+snowflake-axi git fetch MY_DB.MY_SCHEMA.MY_REPO       # write: refresh from origin, locked until granted
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
 snowflake-axi allow                         # write capabilities and their grant status

@@ -4,6 +4,7 @@ import type { CommandSpec } from "./command.js";
 import { allowCommand } from "./commands/allow.js";
 import { dbtCommand } from "./commands/dbt.js";
 import { findCommand } from "./commands/find.js";
+import { gitCommand } from "./commands/git.js";
 import { homeView } from "./commands/home.js";
 import { modelCommand } from "./commands/model.js";
 import { queryCommand } from "./commands/query.js";
@@ -30,6 +31,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   warehouses: warehousesCommand,
   model: modelCommand,
   dbt: dbtCommand,
+  git: gitCommand,
   stage: stageCommand,
   allow: allowCommand,
 };

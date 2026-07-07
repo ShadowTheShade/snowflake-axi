@@ -21,6 +21,9 @@ snowflake-axi semantics       # semantic views: the curated map of tables, metri
 snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
+snowflake-axi dbt deploy MY_PROJECT --branch main   # cut a new project version from git (write, gated)
+snowflake-axi git             # git repositories on Snowflake, account-wide
+snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO  # branches with commit hashes
 snowflake-axi stage @DB.SCHEMA.STAGE
 snowflake-axi allow           # write capabilities and their grant status
 snowflake-axi <command> --help
@@ -88,7 +91,7 @@ Two independent layers keep everyday use read-only:
 
 Write statements through `query` are rejected with the SQL echoed back so an operator can run it manually; arbitrary DML/DDL is permanently out of scope.
 
-Specific write commands exist (currently `dbt execute`) but are disabled until the user opts in, MCP-style:
+Specific write commands exist (currently `dbt execute` and `dbt deploy`) but are disabled until the user opts in, MCP-style:
 
 - Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user in conversation.
 - Once the user agrees, the agent runs `snowflake-axi allow <capability> --agent`; the harness permission prompt for that command is the user's confirmation click.
@@ -113,6 +116,10 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
 | `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant; `--role` when the default role cannot execute it |
+| `dbt deploy <name>` | Cut a new project version from its git repository (FETCH + ADD VERSION, no upload); write, needs the `dbt.deploy` grant; `--branch`, `--repo`, `--path`, `--role` |
+| `git [db[.schema]]` | List git repositories with origin and last-fetched; scope narrows to a database or schema |
+| `git branches <repo>` | Branches in a repository with commit hashes; `--like`, `--limit` |
+| `git fetch <repo>` | Refresh a repository from its origin (FETCH); write, needs the `git.fetch` grant; `--role` |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
 | `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
 | `update` | Self-update (built into axi-sdk-js) |

@@ -15,6 +15,14 @@ export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: 
     description: "Run a deployed dbt project on Snowflake (EXECUTE DBT PROJECT)",
     unlocks: 'snowflake-axi dbt execute <name> --args "build"',
   },
+  "dbt.deploy": {
+    description: "Cut a new dbt project version from its git repository (ALTER DBT PROJECT ADD VERSION)",
+    unlocks: "snowflake-axi dbt deploy <name> --branch main",
+  },
+  "git.fetch": {
+    description: "Refresh a git repository from its origin (ALTER GIT REPOSITORY FETCH)",
+    unlocks: "snowflake-axi git fetch <db.schema.repo>",
+  },
 };
 
 const HEADER = "# Write capabilities granted to snowflake-axi (managed by `snowflake-axi allow`)";

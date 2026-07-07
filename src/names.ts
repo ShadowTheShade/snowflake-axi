@@ -44,7 +44,53 @@ export function parseScope(raw: string | undefined): Scope {
   return { database, schema };
 }
 
+/** The `IN {ACCOUNT|DATABASE|SCHEMA}` suffix a scope maps to for SHOW commands. */
+export function scopeClause(scope: Scope): string {
+  if (scope.database && scope.schema) return ` IN SCHEMA ${scope.database}.${scope.schema}`;
+  if (scope.database) return ` IN DATABASE ${scope.database}`;
+  return " IN ACCOUNT";
+}
+
+/** Human label for a scope, e.g. "account", "MY_DB", or "MY_DB.MY_SCHEMA". */
+export function scopeLabel(scope: Scope): string {
+  if (scope.database) return [scope.database, scope.schema].filter(Boolean).join(".");
+  return "account";
+}
+
 /** Bare words match as contains; patterns with wildcards pass through. */
 export function likePattern(raw: string): string {
   return raw.includes("%") || raw.includes("_") ? raw : `%${raw}%`;
+}
+
+// SHOW commands take no bind variables, so LIKE patterns are interpolated and
+// must stay within identifier characters plus SQL wildcards.
+const SAFE_LIKE = /^[A-Za-z0-9_$%]+$/;
+
+/** Validates and normalizes a --like value for interpolation into a SHOW ... LIKE clause. */
+export function safeLike(raw: string, flagName: string): string {
+  if (!SAFE_LIKE.test(raw)) {
+    throw new AxiError(`Invalid ${flagName} pattern '${raw}'`, "VALIDATION_ERROR", [
+      "Use identifier characters and % wildcards, e.g. --like usage or --like USAGE%",
+    ]);
+  }
+  return likePattern(raw);
+}
+
+export interface RepoName {
+  fqn: string;
+  database: string;
+  schema: string;
+  name: string;
+}
+
+/** Parses a fully qualified git repository object `db.schema.repo` into uppercase parts. */
+export function resolveRepoName(raw: string): RepoName {
+  const parts = raw.split(".");
+  if (parts.length !== 3 || !parts.every((p) => IDENTIFIER.test(p))) {
+    throw new AxiError(`Invalid git repository '${raw}'`, "VALIDATION_ERROR", [
+      "Use the fully qualified repository object: DB.SCHEMA.REPO",
+    ]);
+  }
+  const [database, schema, name] = parts.map((p) => p.toUpperCase());
+  return { fqn: `${database}.${schema}.${name}`, database, schema, name };
 }

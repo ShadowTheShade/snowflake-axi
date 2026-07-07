@@ -1,37 +1,13 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { requireGrant } from "../grants.js";
-import { IDENTIFIER, likePattern, parseScope, type Scope } from "../names.js";
+import { IDENTIFIER, parseScope, resolveRepoName, type Scope, safeLike, scopeClause, scopeLabel } from "../names.js";
 import { runQuery } from "../snowflake.js";
-
-// SHOW commands take no bind variables, so LIKE patterns are interpolated and
-// must stay within identifier characters plus SQL wildcards.
-const SAFE_LIKE = /^[A-Za-z0-9_$%]+$/;
-
-function scopeClause(scope: Scope): string {
-  if (scope.database && scope.schema) return ` IN SCHEMA ${scope.database}.${scope.schema}`;
-  if (scope.database) return ` IN DATABASE ${scope.database}`;
-  return " IN ACCOUNT";
-}
-
-function scopeLabel(scope: Scope): string {
-  if (scope.database) return [scope.database, scope.schema].filter(Boolean).join(".");
-  return "account";
-}
 
 async function showProjects(like: string | undefined, scope: Scope, role?: string): Promise<Record<string, unknown>[]> {
   const likeClause = like === undefined ? "" : ` LIKE '${like}'`;
   const { rows } = await runQuery(`SHOW DBT PROJECTS${likeClause}${scopeClause(scope)}`, { role });
   return rows;
-}
-
-function safeLike(raw: string, flagName: string): string {
-  if (!SAFE_LIKE.test(raw)) {
-    throw new AxiError(`Invalid ${flagName} pattern '${raw}'`, "VALIDATION_ERROR", [
-      "Use identifier characters and % wildcards, e.g. --like usage or --like USAGE%",
-    ]);
-  }
-  return likePattern(raw);
 }
 
 function fqnOf(row: Record<string, unknown>): string {
@@ -177,9 +153,113 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
   };
 }
 
+interface GitSource {
+  repo: string;
+  refKind: "branches" | "tags" | "commits";
+  ref: string;
+  path: string;
+}
+
+const GIT_REF = /^[A-Za-z0-9_][A-Za-z0-9_./-]*$/;
+
+// A version's source URI is git-deployable only when it points at a git repository
+// stage; workspace and snow://dbt sources belong to their own tools, not deploy.
+function parseGitSource(uri: unknown): GitSource | undefined {
+  if (typeof uri !== "string" || !uri.startsWith("@")) return undefined;
+  const [repo, refKind, ref, ...rest] = uri.slice(1).split("/");
+  if (!repo || (refKind !== "branches" && refKind !== "tags" && refKind !== "commits") || !ref) return undefined;
+  return { repo, refKind, ref, path: rest.join("/") };
+}
+
+function assertRef(raw: string, flag: string): string {
+  if (!GIT_REF.test(raw)) {
+    throw new AxiError(`Invalid ${flag} '${raw}'`, "VALIDATION_ERROR", [
+      "Use letters, digits, and _ . / - (no spaces or quotes)",
+    ]);
+  }
+  return raw;
+}
+
+// A redeploy inherits the project's current git source; flags override it piece by piece.
+function resolveSource(project: Record<string, unknown>, args: CommandArgs): GitSource {
+  const stored = parseGitSource(project.default_version_source_location_uri);
+  const repoFlag = args.str("--repo");
+  const branchFlag = args.str("--branch");
+  const pathFlag = args.str("--path");
+  const repo = repoFlag ? resolveRepoName(repoFlag).fqn : stored?.repo;
+  const refKind: GitSource["refKind"] = branchFlag ? "branches" : (stored?.refKind ?? "branches");
+  const ref = branchFlag ? assertRef(branchFlag, "--branch") : stored?.ref;
+  const path = pathFlag !== undefined ? assertRef(pathFlag, "--path") : (stored?.path ?? "");
+  if (!repo || !ref) {
+    throw new AxiError(`Cannot infer a git source for ${fqnOf(project)}`, "VALIDATION_ERROR", [
+      "Its current version is not deployed from a git repository",
+      "Pass --repo DB.SCHEMA.REPO and --branch <name> to point at one",
+    ]);
+  }
+  return { repo, refKind, ref, path };
+}
+
+function gitLocation(source: GitSource): string {
+  const base = `@${source.repo}/${source.refKind}/${source.ref}`;
+  return source.path ? `${base}/${source.path}` : base;
+}
+
+async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
+  requireGrant("dbt.deploy");
+  const role = args.str("--role");
+  const timeoutSeconds = args.int("--timeout");
+  const upper = parseProjectName(args.positionals[0]);
+  const { match, label, matches } = await findProject(upper, role);
+  if (!match) {
+    if (matches.length > 1) {
+      throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
+        ...matches.map((row) => `snowflake-axi dbt deploy ${fqnOf(row)}`),
+      ]);
+    }
+    throw new AxiError(`No dbt project matches '${label}'`, "NOT_FOUND", [
+      "Run `snowflake-axi dbt` to list projects account-wide",
+      "deploy adds a version to an existing project; create a new one before deploying it",
+    ]);
+  }
+
+  const fqn = fqnOf(match);
+  const source = resolveSource(match, args);
+  const location = gitLocation(source);
+  const started = Date.now();
+
+  if (!args.bool("--no-fetch")) {
+    await runQuery(`ALTER GIT REPOSITORY ${source.repo} FETCH`, { role, timeoutSeconds });
+  }
+
+  const { rows: manifest } = await runQuery(`LIST ${location}/dbt_project.yml`, { role });
+  if (manifest.length === 0) {
+    throw new AxiError(`No dbt_project.yml under ${location}`, "NOT_FOUND", [
+      "Check --branch and --path point at the dbt project root inside the repository",
+      `Run \`snowflake-axi stage ${location}/\` to inspect the tree`,
+    ]);
+  }
+
+  await runQuery(`ALTER DBT PROJECT ${fqn} ADD VERSION FROM '${location}'`, { role, timeoutSeconds });
+
+  const { rows: versions } = await runQuery(`SHOW VERSIONS IN DBT PROJECT ${fqn}`, { role });
+  const latest = versions.find((row) => String(row.is_last) === "true") ?? versions[versions.length - 1];
+  const commit = latest?.git_commit_hash ? String(latest.git_commit_hash).slice(0, 12) : undefined;
+
+  return {
+    project: fqn,
+    deployed_from: location,
+    version: latest?.name ?? "(unknown)",
+    ...(latest?.alias ? { alias: latest.alias } : {}),
+    ...(commit ? { commit } : {}),
+    is_default: String(latest?.is_default) === "true",
+    elapsed: `${((Date.now() - started) / 1000).toFixed(1)}s`,
+    help: [`Run \`snowflake-axi dbt execute ${match.name} --args "build"\` to run this version`],
+  };
+}
+
 export const dbtCommand = defineCommand("dbt", {
-  summary: "dbt Projects on Snowflake: list, inspect, and (gated) execute",
-  description: "List, inspect, and execute dbt Projects on Snowflake (server-side dbt objects)",
+  summary: "dbt Projects on Snowflake: list, inspect, and (gated) execute or deploy",
+  description: "List, inspect, execute, and deploy dbt Projects on Snowflake (server-side dbt objects)",
   defaultSubcommand: "list",
   subcommands: {
     list: {
@@ -235,6 +315,55 @@ export const dbtCommand = defineCommand("dbt", {
       ],
       examples: ['snowflake-axi dbt execute MY_PROJECT --args "build"'],
       run: execute,
+    },
+    deploy: {
+      description: "Cut a new project version from its git repository (write; needs the dbt.deploy grant)",
+      positionals: { usage: "<name | db.schema.name>", min: 1, max: 1 },
+      flags: {
+        "--branch": {
+          type: "string",
+          placeholder: "<name>",
+          description: "git branch to deploy (default: the project's current source branch)",
+        },
+        "--repo": {
+          type: "string",
+          placeholder: "<db.schema.repo>",
+          description: "git repository object to deploy from (default: the project's current source)",
+        },
+        "--path": {
+          type: "string",
+          placeholder: "<subdir>",
+          description: "project subdirectory within the branch (default: the project's current source path)",
+        },
+        "--no-fetch": {
+          type: "boolean",
+          description: "skip refreshing the repository from origin; deploy the already-fetched commit",
+        },
+        "--timeout": {
+          type: "int",
+          placeholder: "<s>",
+          description: "statement timeout in seconds",
+          default: 600,
+          min: 1,
+          max: 14400,
+        },
+        "--role": {
+          type: "string",
+          placeholder: "<name>",
+          description: "run as another role granted to the user; needs OWNERSHIP on the project and WRITE on the repo",
+        },
+      },
+      notes: [
+        "Refused with WRITE_NOT_ALLOWED until the user grants dbt.deploy (see `snowflake-axi allow --help`).",
+        "Git-native: fetches the repository, then ADD VERSION from '@repo/branches/<branch>/<path>' - no file upload.",
+        "With no flags it redeploys from the project's current git source; the new version becomes LAST, which is what execute runs.",
+        "The role needs OWNERSHIP on the project and WRITE on the git repository; switch to it with --role.",
+      ],
+      examples: [
+        "snowflake-axi dbt deploy MY_PROJECT --role DBT_ROLE",
+        "snowflake-axi dbt deploy MY_DB.MY_SCHEMA.MY_PROJECT --branch main --path analytics",
+      ],
+      run: deploy,
     },
   },
 });
