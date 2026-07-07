@@ -2,14 +2,30 @@
   "name": "snowflake-axi",
   "version": "0.1.0",
   "description": "Read-only Snowflake explorer for agents; TOON output, SELECT-only",
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "MIT",
+  "author": "Anthony Gagliano",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ShadowTheShade/snowflake-axi.git"
+  },
+  "homepage": "https://github.com/ShadowTheShade/snowflake-axi#readme",
+  "bugs": "https://github.com/ShadowTheShade/snowflake-axi/issues",
+  "keywords": [
+    "snowflake",
+    "cli",
+    "agent",
+    "axi",
+    "toon",
+    "read-only",
+    "dbt"
+  ],
   "type": "module",
   "bin": {
     "snowflake-axi": "dist/bin/snowflake-axi.js"
   },
   "files": [
-    "dist"
+    "dist",
+    "skill"
   ],
   "engines": {
     "node": ">=20"
@@ -21,7 +37,7 @@
     "lint:fix": "biome check --write .",
     "test": "vitest run",
     "test:integration": "npm run build && vitest run --config vitest.integration.config.ts",
-    "prepublishOnly": "npm run typecheck && npm run build && npm test"
+    "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
     "axi-sdk-js": "^0.1.8",
