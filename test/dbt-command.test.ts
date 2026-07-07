@@ -165,7 +165,7 @@ describe("dbt execute", () => {
     expect(runQuery.mock.calls[1][0]).toBe(
       "EXECUTE DBT PROJECT STITCH_DB.METRICS.MY_PROJECT args='run --vars ''k: v'''",
     );
-    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600 });
+    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600, useWriteRole: true });
     expect(output.project).toBe("STITCH_DB.METRICS.MY_PROJECT");
     expect(output.rows).toEqual([{ dbt_output: "ok" }]);
   });

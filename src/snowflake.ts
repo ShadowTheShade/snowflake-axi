@@ -12,6 +12,8 @@ export interface QueryOptions {
   binds?: (string | number)[];
   maxRows?: number;
   timeoutSeconds?: number;
+  /** Write commands escalate to SNOWFLAKE_WRITE_ROLE when it is configured; reads never do. */
+  useWriteRole?: boolean;
 }
 
 interface ColumnType {
@@ -54,7 +56,7 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
   };
   const body = JSON.stringify({
     statement: sqlText,
-    role: config.role,
+    role: options.useWriteRole ? (config.writeRole ?? config.role) : config.role,
     warehouse: config.warehouse,
     database: config.database,
     schema: config.schema,

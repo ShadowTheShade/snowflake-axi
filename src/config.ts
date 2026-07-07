@@ -11,6 +11,7 @@ export interface Config {
   user: string;
   token: string;
   role?: string;
+  writeRole?: string;
   warehouse?: string;
   database?: string;
   schema?: string;
@@ -125,7 +126,7 @@ export function loadConfig(): Config {
       "Optional keys: SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA",
     ]);
   }
-  for (const key of ["SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"]) {
+  for (const key of ["SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA", "SNOWFLAKE_WRITE_ROLE"]) {
     const value = get(key);
     if (value && !IDENTIFIER.test(value)) {
       throw new AxiError(`Invalid ${key} '${value}': not an unquoted identifier`, "CONFIG_ERROR", [
@@ -138,6 +139,7 @@ export function loadConfig(): Config {
     user,
     token,
     role: get("SNOWFLAKE_ROLE"),
+    writeRole: get("SNOWFLAKE_WRITE_ROLE"),
     warehouse: get("SNOWFLAKE_WAREHOUSE"),
     database: get("SNOWFLAKE_DATABASE"),
     schema: get("SNOWFLAKE_SCHEMA"),

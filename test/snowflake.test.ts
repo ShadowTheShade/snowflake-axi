@@ -7,6 +7,7 @@ vi.mock("../src/config.js", async (importOriginal) => ({
     user: "SVC",
     token: "the-pat",
     role: "READER",
+    writeRole: "WRITER",
     warehouse: "WH",
     database: "DB",
     schema: "PUBLIC",
@@ -74,6 +75,14 @@ describe("runQuery over the SQL API", () => {
       "1": { type: "TEXT", value: "PUBLIC" },
       "2": { type: "FIXED", value: "5" },
     });
+  });
+
+  it("escalates to the write role only when asked", async () => {
+    fetchMock.mockResolvedValue(okResult());
+    await runQuery("EXECUTE DBT PROJECT P args='build'", { useWriteRole: true });
+    await runQuery("SELECT 1");
+    const roles = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body).role);
+    expect(roles).toEqual(["WRITER", "READER"]);
   });
 
   it("fetches only the partitions maxRows needs while reporting the full total", async () => {

@@ -34,6 +34,7 @@ SNOWFLAKE_ACCOUNT=<account identifier>
 SNOWFLAKE_USER=<service user>
 SNOWFLAKE_TOKEN=<programmatic access token, used as password>
 SNOWFLAKE_ROLE=<read-only role>
+SNOWFLAKE_WRITE_ROLE=<role for gated write commands, optional>
 SNOWFLAKE_WAREHOUSE=<warehouse>
 SNOWFLAKE_DATABASE=<default database>
 SNOWFLAKE_SCHEMA=<default schema>
@@ -65,6 +66,7 @@ Specific write commands exist (currently `dbt execute`) but are disabled until a
 - `snowflake-axi allow <capability> --revoke` withdraws consent at any time.
 
 The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not security: the Snowflake role remains the hard boundary, so pair write capabilities with a role that has exactly the privileges you intend.
+Set `SNOWFLAKE_WRITE_ROLE` to keep that separation clean: gated write commands escalate to it, while every read keeps running as the read-only `SNOWFLAKE_ROLE`.
 
 ## Commands
 

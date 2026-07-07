@@ -165,6 +165,7 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
   const started = Date.now();
   const { rows } = await runQuery(`EXECUTE DBT PROJECT ${fqn} args='${literal}'`, {
     timeoutSeconds: args.int("--timeout"),
+    useWriteRole: true,
   });
   return {
     project: fqn,
@@ -223,7 +224,7 @@ export const dbtCommand = defineCommand("dbt", {
       },
       notes: [
         "Refused with WRITE_NOT_ALLOWED until a human runs `snowflake-axi allow dbt.execute`.",
-        "The connection's role must also have the USAGE privilege to execute the project.",
+        "Runs as SNOWFLAKE_WRITE_ROLE when configured (reads never escalate); that role needs the privileges to execute the project.",
       ],
       examples: ['snowflake-axi dbt execute MY_PROJECT --args "build"'],
       run: execute,
