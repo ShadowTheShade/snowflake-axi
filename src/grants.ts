@@ -19,6 +19,10 @@ export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: 
     description: "Cut a new dbt project version from its git repository (ALTER DBT PROJECT ADD VERSION)",
     unlocks: "snowflake-axi dbt deploy <name> --branch main",
   },
+  "dbt.drop": {
+    description: "Drop a dbt project and all its versions (DROP DBT PROJECT)",
+    unlocks: "snowflake-axi dbt drop <db.schema.name>",
+  },
   "git.fetch": {
     description: "Refresh a git repository from its origin (ALTER GIT REPOSITORY FETCH)",
     unlocks: "snowflake-axi git fetch <db.schema.repo>",

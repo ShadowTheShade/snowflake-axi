@@ -308,4 +308,110 @@ describe("dbt deploy", () => {
     runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
     await expect(dbtCommand.run(["deploy", "ghost"])).rejects.toMatchObject({ code: "NOT_FOUND" });
   });
+
+  it("creates a new project when the fully qualified name does not exist", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [], total: 0 }) // findProject: not found
+      .mockResolvedValueOnce({ rows: [], total: 0 }) // FETCH
+      .mockResolvedValueOnce({ rows: [{ name: "dbt_project.yml" }], total: 1 }) // LIST
+      .mockResolvedValueOnce({ rows: [], total: 0 }) // CREATE
+      .mockResolvedValueOnce({
+        rows: [{ name: "VERSION$1", is_last: "true", is_default: "true", git_commit_hash: "abc123def4567" }],
+        total: 1,
+      }); // SHOW VERSIONS
+    const output = (await dbtCommand.run([
+      "deploy",
+      "stitch_db.metrics.newproj",
+      "--repo",
+      "d.s.r",
+      "--branch",
+      "main",
+    ])) as Record<string, unknown>;
+    expect(runQuery.mock.calls[3][0]).toBe("CREATE DBT PROJECT STITCH_DB.METRICS.NEWPROJ FROM '@D.S.R/branches/main'");
+    expect(output).toMatchObject({ project: "STITCH_DB.METRICS.NEWPROJ", created: true, version: "VERSION$1" });
+  });
+
+  it("passes DEFAULT_TARGET and EXTERNAL_ACCESS_INTEGRATIONS when creating", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [], total: 0 })
+      .mockResolvedValueOnce({ rows: [], total: 0 })
+      .mockResolvedValueOnce({ rows: [{ name: "dbt_project.yml" }], total: 1 })
+      .mockResolvedValueOnce({ rows: [], total: 0 })
+      .mockResolvedValueOnce({ rows: [{ name: "VERSION$1", is_last: "true" }], total: 1 });
+    await dbtCommand.run([
+      "deploy",
+      "d.s.newproj",
+      "--repo",
+      "d.s.r",
+      "--branch",
+      "main",
+      "--target",
+      "prod",
+      "--integrations",
+      "DBT_HUB,PIP_ACCESS",
+    ]);
+    expect(runQuery.mock.calls[3][0]).toBe(
+      "CREATE DBT PROJECT D.S.NEWPROJ FROM '@D.S.R/branches/main' DEFAULT_TARGET = 'prod' EXTERNAL_ACCESS_INTEGRATIONS = (DBT_HUB, PIP_ACCESS)",
+    );
+  });
+
+  it("requires a fully qualified name to create a project", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    await expect(dbtCommand.run(["deploy", "ghost", "--repo", "d.s.r", "--branch", "main"])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires a git source to create a project", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    await expect(dbtCommand.run(["deploy", "d.s.newproj"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects --target on an existing project", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [GIT_ROW], total: 1 });
+    await expect(dbtCommand.run(["deploy", "my_project", "--target", "prod"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("dbt drop", () => {
+  it("checks the write grant before anything else", async () => {
+    requireGrant.mockImplementation(() => {
+      throw Object.assign(new Error("Write capability 'dbt.drop' is not granted"), { code: "WRITE_NOT_ALLOWED" });
+    });
+    await expect(dbtCommand.run(["drop", "my_project"])).rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
+    expect(requireGrant).toHaveBeenCalledWith("dbt.drop");
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("resolves and drops an existing project", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW], total: 1 }).mockResolvedValueOnce({ rows: [], total: 0 });
+    const output = (await dbtCommand.run(["drop", "my_project"])) as Record<string, unknown>;
+    expect(runQuery.mock.calls[1][0]).toBe("DROP DBT PROJECT IF EXISTS STITCH_DB.METRICS.MY_PROJECT");
+    expect(output).toEqual({ project: "STITCH_DB.METRICS.MY_PROJECT", dropped: true });
+  });
+
+  it("threads --role through the lookup and the drop", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW], total: 1 }).mockResolvedValueOnce({ rows: [], total: 0 });
+    await dbtCommand.run(["drop", "my_project", "--role", "ANALYTICS_ROLE"]);
+    expect(runQuery.mock.calls[0][1]).toEqual({ role: "ANALYTICS_ROLE" });
+    expect(runQuery.mock.calls[1][1]).toEqual({ role: "ANALYTICS_ROLE" });
+  });
+
+  it("is an idempotent no-op when the project is absent", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    const output = (await dbtCommand.run(["drop", "d.s.ghost"])) as Record<string, unknown>;
+    expect(output).toMatchObject({ dropped: false, note: "not found (no-op)" });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("errors on ambiguous names before dropping", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
+    await expect(dbtCommand.run(["drop", "usage"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
 });

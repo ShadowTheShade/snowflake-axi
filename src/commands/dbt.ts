@@ -180,9 +180,9 @@ function assertRef(raw: string, flag: string): string {
   return raw;
 }
 
-// A redeploy inherits the project's current git source; flags override it piece by piece.
-function resolveSource(project: Record<string, unknown>, args: CommandArgs): GitSource {
-  const stored = parseGitSource(project.default_version_source_location_uri);
+// A redeploy inherits the project's current git source; a new project must be given one.
+function resolveSource(storedUri: unknown, fqn: string, args: CommandArgs): GitSource {
+  const stored = parseGitSource(storedUri);
   const repoFlag = args.str("--repo");
   const branchFlag = args.str("--branch");
   const pathFlag = args.str("--path");
@@ -191,9 +191,9 @@ function resolveSource(project: Record<string, unknown>, args: CommandArgs): Git
   const ref = branchFlag ? assertRef(branchFlag, "--branch") : stored?.ref;
   const path = pathFlag !== undefined ? assertRef(pathFlag, "--path") : (stored?.path ?? "");
   if (!repo || !ref) {
-    throw new AxiError(`Cannot infer a git source for ${fqnOf(project)}`, "VALIDATION_ERROR", [
-      "Its current version is not deployed from a git repository",
-      "Pass --repo DB.SCHEMA.REPO and --branch <name> to point at one",
+    throw new AxiError(`Cannot infer a git source for ${fqn}`, "VALIDATION_ERROR", [
+      stored ? "Its current version is not from a git repository" : "A new project needs an explicit git source",
+      "Pass --repo DB.SCHEMA.REPO and --branch <name> to point at a git repository",
     ]);
   }
   return { repo, refKind, ref, path };
@@ -204,27 +204,63 @@ function gitLocation(source: GitSource): string {
   return source.path ? `${base}/${source.path}` : base;
 }
 
+const INTEGRATION = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
+// CREATE-only clauses; both stay empty on a redeploy, which only adds a version.
+function targetClause(raw: string | undefined): string {
+  if (raw === undefined) return "";
+  if (!/^[A-Za-z0-9_]+$/.test(raw)) {
+    throw new AxiError(`Invalid --target '${raw}'`, "VALIDATION_ERROR", ["Use a plain target name like dev or prod"]);
+  }
+  return ` DEFAULT_TARGET = '${raw}'`;
+}
+
+function integrationsClause(raw: string | undefined): string {
+  if (raw === undefined) return "";
+  const names = raw
+    .split(",")
+    .map((name) => name.trim())
+    .filter(Boolean);
+  for (const name of names) {
+    if (!INTEGRATION.test(name)) {
+      throw new AxiError(`Invalid integration name '${name}'`, "VALIDATION_ERROR", [
+        "Pass a comma-separated list of external access integration names",
+      ]);
+    }
+  }
+  return names.length > 0 ? ` EXTERNAL_ACCESS_INTEGRATIONS = (${names.join(", ")})` : "";
+}
+
 async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
   requireGrant("dbt.deploy");
   const role = args.str("--role");
   const timeoutSeconds = args.int("--timeout");
   const upper = parseProjectName(args.positionals[0]);
   const { match, label, matches } = await findProject(upper, role);
-  if (!match) {
-    if (matches.length > 1) {
-      throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
-        ...matches.map((row) => `snowflake-axi dbt deploy ${fqnOf(row)}`),
-      ]);
-    }
+
+  if (!match && matches.length > 1) {
+    throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
+      ...matches.map((row) => `snowflake-axi dbt deploy ${fqnOf(row)}`),
+    ]);
+  }
+  const creating = !match;
+  if (creating && upper.length !== 3) {
     throw new AxiError(`No dbt project matches '${label}'`, "NOT_FOUND", [
       "Run `snowflake-axi dbt` to list projects account-wide",
-      "deploy adds a version to an existing project; create a new one before deploying it",
+      "To create a new project, give its full db.schema.name with --repo and --branch",
+    ]);
+  }
+  if (!creating && (args.str("--target") !== undefined || args.str("--integrations") !== undefined)) {
+    throw new AxiError("--target and --integrations only apply when creating a new project", "VALIDATION_ERROR", [
+      `${fqnOf(match)} already exists; deploy adds a version and leaves target and integrations unchanged`,
+      "Change them in Snowflake with ALTER DBT PROJECT ... SET",
     ]);
   }
 
-  const fqn = fqnOf(match);
-  const source = resolveSource(match, args);
+  const fqn = match ? fqnOf(match) : upper.join(".");
+  const source = resolveSource(match?.default_version_source_location_uri, fqn, args);
   const location = gitLocation(source);
+  const create = `CREATE DBT PROJECT ${fqn} FROM '${location}'${targetClause(args.str("--target"))}${integrationsClause(args.str("--integrations"))}`;
   const started = Date.now();
 
   if (!args.bool("--no-fetch")) {
@@ -239,7 +275,8 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
     ]);
   }
 
-  await runQuery(`ALTER DBT PROJECT ${fqn} ADD VERSION FROM '${location}'`, { role, timeoutSeconds });
+  const write = creating ? create : `ALTER DBT PROJECT ${fqn} ADD VERSION FROM '${location}'`;
+  await runQuery(write, { role, timeoutSeconds });
 
   const { rows: versions } = await runQuery(`SHOW VERSIONS IN DBT PROJECT ${fqn}`, { role });
   const latest = versions.find((row) => String(row.is_last) === "true") ?? versions[versions.length - 1];
@@ -247,19 +284,40 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
 
   return {
     project: fqn,
+    ...(creating ? { created: true } : {}),
     deployed_from: location,
     version: latest?.name ?? "(unknown)",
     ...(latest?.alias ? { alias: latest.alias } : {}),
     ...(commit ? { commit } : {}),
     is_default: String(latest?.is_default) === "true",
     elapsed: `${((Date.now() - started) / 1000).toFixed(1)}s`,
-    help: [`Run \`snowflake-axi dbt execute ${match.name} --args "build"\` to run this version`],
+    help: [`Run \`snowflake-axi dbt execute ${fqn.split(".").pop()} --args "build"\` to run this version`],
   };
 }
 
+async function drop(args: CommandArgs): Promise<Record<string, unknown>> {
+  requireGrant("dbt.drop");
+  const role = args.str("--role");
+  const upper = parseProjectName(args.positionals[0]);
+  const { match, label, matches } = await findProject(upper, role);
+  if (!match) {
+    if (matches.length > 1) {
+      throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
+        ...matches.map((row) => `snowflake-axi dbt drop ${fqnOf(row)}`),
+      ]);
+    }
+    // Idempotent: an absent project is already the desired end state.
+    return { project: label, dropped: false, note: "not found (no-op)" };
+  }
+
+  const fqn = fqnOf(match);
+  await runQuery(`DROP DBT PROJECT IF EXISTS ${fqn}`, { role });
+  return { project: fqn, dropped: true };
+}
+
 export const dbtCommand = defineCommand("dbt", {
-  summary: "dbt Projects on Snowflake: list, inspect, and (gated) execute or deploy",
-  description: "List, inspect, execute, and deploy dbt Projects on Snowflake (server-side dbt objects)",
+  summary: "dbt Projects on Snowflake: list, inspect, and (gated) execute, deploy, or drop",
+  description: "List, inspect, execute, deploy, and drop dbt Projects on Snowflake (server-side dbt objects)",
   defaultSubcommand: "list",
   subcommands: {
     list: {
@@ -317,7 +375,8 @@ export const dbtCommand = defineCommand("dbt", {
       run: execute,
     },
     deploy: {
-      description: "Cut a new project version from its git repository (write; needs the dbt.deploy grant)",
+      description:
+        "Deploy a project from its git repository - create it or cut a new version (write; dbt.deploy grant)",
       positionals: { usage: "<name | db.schema.name>", min: 1, max: 1 },
       flags: {
         "--branch": {
@@ -347,6 +406,16 @@ export const dbtCommand = defineCommand("dbt", {
           min: 1,
           max: 14400,
         },
+        "--target": {
+          type: "string",
+          placeholder: "<name>",
+          description: "DEFAULT_TARGET for a newly created project (e.g. dev, prod)",
+        },
+        "--integrations": {
+          type: "string",
+          placeholder: "<a,b>",
+          description: "comma-separated EXTERNAL_ACCESS_INTEGRATIONS for a newly created project",
+        },
         "--role": {
           type: "string",
           placeholder: "<name>",
@@ -357,13 +426,33 @@ export const dbtCommand = defineCommand("dbt", {
         "Refused with WRITE_NOT_ALLOWED until the user grants dbt.deploy (see `snowflake-axi allow --help`).",
         "Git-native: fetches the repository, then ADD VERSION from '@repo/branches/<branch>/<path>' - no file upload.",
         "With no flags it redeploys from the project's current git source; the new version becomes LAST, which is what execute runs.",
-        "The role needs OWNERSHIP on the project and WRITE on the git repository; switch to it with --role.",
+        "Creates the project (CREATE DBT PROJECT) when its full db.schema.name does not exist yet and --repo and --branch are given; --target and --integrations apply only then.",
+        "The role needs OWNERSHIP on the project (or CREATE DBT PROJECT on the schema for a new one) and WRITE on the git repository; switch to it with --role.",
       ],
       examples: [
         "snowflake-axi dbt deploy MY_PROJECT --role DBT_ROLE",
         "snowflake-axi dbt deploy MY_DB.MY_SCHEMA.MY_PROJECT --branch main --path analytics",
+        "snowflake-axi dbt deploy MY_DB.MY_SCHEMA.NEW_PROJECT --repo MY_DB.PUBLIC.MY_REPO --branch main --target dev",
       ],
       run: deploy,
+    },
+    drop: {
+      description: "Drop a dbt project and all its versions (write; needs the dbt.drop grant)",
+      positionals: { usage: "<name | db.schema.name>", min: 1, max: 1 },
+      flags: {
+        "--role": {
+          type: "string",
+          placeholder: "<name>",
+          description: "run as another role granted to the user; needs OWNERSHIP on the project",
+        },
+      },
+      notes: [
+        "Refused with WRITE_NOT_ALLOWED until the user grants dbt.drop (see `snowflake-axi allow --help`).",
+        "Destructive and irreversible: removes the project object and every version. Dropping an absent project is a no-op (exit 0).",
+        "The role needs OWNERSHIP on the project; switch to it with --role.",
+      ],
+      examples: ["snowflake-axi dbt drop MY_DB.MY_SCHEMA.MY_PROJECT --role DBT_ROLE"],
+      run: drop,
     },
   },
 });

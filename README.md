@@ -116,7 +116,8 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
 | `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant; `--role` when the default role cannot execute it |
-| `dbt deploy <name>` | Cut a new project version from its git repository (FETCH + ADD VERSION, no upload); write, needs the `dbt.deploy` grant; `--branch`, `--repo`, `--path`, `--role` |
+| `dbt deploy <name>` | Create a project or cut a new version from its git repository (FETCH + CREATE / ADD VERSION, no upload); write, needs the `dbt.deploy` grant; `--branch`, `--repo`, `--path`, `--target`, `--integrations`, `--role` |
+| `dbt drop <name>` | Drop a dbt project and all its versions (idempotent); write, needs the `dbt.drop` grant; `--role` |
 | `git [db[.schema]]` | List git repositories with origin and last-fetched; scope narrows to a database or schema |
 | `git branches <repo>` | Branches in a repository with commit hashes; `--like`, `--limit` |
 | `git fetch <repo>` | Refresh a repository from its origin (FETCH); write, needs the `git.fetch` grant; `--role` |
