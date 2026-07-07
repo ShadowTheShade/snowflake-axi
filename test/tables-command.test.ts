@@ -24,6 +24,31 @@ beforeEach(() => {
 });
 
 describe("tables command", () => {
+  it("falls back to readable databases when no scope and no default exist", async () => {
+    loadConfig.mockReturnValue({ modelDirs: [] });
+    runQuery.mockResolvedValueOnce({
+      rows: [
+        { name: "ANALYTICS_DB", comment: "warehouse models" },
+        { name: "RAW_DB", comment: "" },
+      ],
+      total: 2,
+    });
+    const output = (await tablesCommand.run([])) as Record<string, unknown>;
+    expect(runQuery.mock.calls[0][0]).toBe("SHOW DATABASES");
+    expect(output.count).toBe("2 databases");
+    expect(output.databases).toEqual([{ name: "ANALYTICS_DB", comment: "warehouse models" }, { name: "RAW_DB" }]);
+    expect((output.help as string[])[0]).toContain("tables <db>");
+  });
+
+  it("filters the database fallback with --like and reports empty definitively", async () => {
+    loadConfig.mockReturnValue({ modelDirs: [] });
+    runQuery.mockResolvedValue({ rows: [{ name: "ANALYTICS_DB" }, { name: "RAW_DB" }], total: 2 });
+    const filtered = (await tablesCommand.run(["--like", "raw"])) as Record<string, unknown>;
+    expect(filtered.databases).toEqual([{ name: "RAW_DB" }]);
+    const none = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
+    expect(none.count).toBe("0 databases matching 'nope' readable with this role");
+  });
+
   it("lists default-scope tables largest first, excluding views with a note", async () => {
     runQuery.mockResolvedValueOnce({ rows: BASE_ROWS, total: 3 });
     const output = (await tablesCommand.run([])) as Record<string, unknown>;

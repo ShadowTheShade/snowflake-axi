@@ -42,6 +42,27 @@ async function schemasSummary(
   };
 }
 
+// With no scope argument and no configured default, the account level is the
+// natural answer: list what is readable and teach the drill-down.
+async function databasesSummary(like: string | undefined, limit: number): Promise<Record<string, unknown>> {
+  const { rows } = await runQuery("SHOW DATABASES");
+  const pattern = like === undefined ? undefined : new RegExp(likePattern(like).replace(/%/g, ".*"), "i");
+  const matching = pattern ? rows.filter((row) => pattern.test(String(row.name))) : rows;
+  const matchLabel = like === undefined ? "" : ` matching '${like}'`;
+  if (matching.length === 0) {
+    return { count: `0 databases${matchLabel} readable with this role` };
+  }
+  const shown = matching.slice(0, limit);
+  return {
+    count: `${matching.length} databases${matchLabel}`,
+    databases: shown.map((row) => ({
+      name: row.name,
+      ...(row.comment ? { comment: row.comment } : {}),
+    })),
+    help: ["Run `snowflake-axi tables <db>` for its schemas, `snowflake-axi tables <db>.<schema>` for tables"],
+  };
+}
+
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const config = loadConfig();
   const scope = parseScope(args.positionals[0]);
@@ -51,9 +72,12 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
 
   const database = scope.database ?? config.database?.toUpperCase();
   if (!database) {
-    throw new AxiError("No database in scope", "VALIDATION_ERROR", [
-      "Run `snowflake-axi tables <db>[.<schema>]` or set SNOWFLAKE_DATABASE in the env file",
-    ]);
+    if (includeViews) {
+      throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
+        "Run `snowflake-axi tables <db>.<schema> --views`",
+      ]);
+    }
+    return databasesSummary(like, limit);
   }
   const schema = scope.schema ?? (scope.database ? undefined : config.schema?.toUpperCase());
   if (!schema) {
@@ -127,7 +151,7 @@ export const tablesCommand = defineCommand("tables", {
       "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
     },
     notes: [
-      "(no scope): tables in the configured default database.schema",
+      "(no scope): tables in the default database.schema; with no default configured, readable databases",
       "db: schema summary for that database",
       "db.schema: tables in that schema",
     ],

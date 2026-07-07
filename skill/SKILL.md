@@ -36,7 +36,9 @@ snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
 snowflake-axi allow                         # write capabilities and their grant status
 ```
 
-- Unqualified table names resolve against the configured default database.schema.
+- Unqualified table names resolve against the configured default database.schema;
+  if none is configured, qualify names fully (`DB.SCHEMA.TABLE`) - `tables` with no
+  arguments then lists readable databases to drill into.
 - `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.

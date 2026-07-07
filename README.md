@@ -89,7 +89,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | Command | Purpose |
 |---|---|
 | (no args) | Connection context, databases, next-step suggestions |
-| `tables [db[.schema]]` | Tables with row counts and sizes (INFORMATION_SCHEMA, no scan); db scope lists schemas |
+| `tables [db[.schema]]` | Tables with row counts and sizes (INFORMATION_SCHEMA, no scan); db scope lists schemas, no scope and no default lists databases |
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
 | `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
