@@ -15,7 +15,7 @@ import type { CommandSpec } from "./command.js";
 
 const DESCRIPTION = "Read-only Snowflake explorer for agents; TOON output, SELECT-only";
 
-const CORE_COMMANDS: Record<string, CommandSpec> = {
+export const CORE_COMMANDS: Record<string, CommandSpec> = {
   tables: tablesCommand,
   schema: schemaCommand,
   sample: sampleCommand,

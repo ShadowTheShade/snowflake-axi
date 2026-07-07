@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { execFile } from "node:child_process";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { loadConfig } from "../src/config.js";
+import { cli } from "./harness.js";
 
 /**
  * End-to-end tests running the built CLI as a subprocess, the way an agent does.
@@ -11,27 +9,6 @@ import { loadConfig } from "../src/config.js";
  * They are skipped when no credentials are configured, so `npm run
  * test:integration` is safe to run anywhere.
  */
-
-const BIN = fileURLToPath(new URL("../dist/bin/snowflake-axi.js", import.meta.url));
-const exec = promisify(execFile);
-
-interface CliResult {
-  stdout: string;
-  code: number;
-}
-
-async function cli(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
-  try {
-    const { stdout } = await exec(process.execPath, [BIN, ...args], {
-      env: { ...process.env, ...env },
-      timeout: 60000,
-    });
-    return { stdout, code: 0 };
-  } catch (error) {
-    const failed = error as { stdout?: string; stderr?: string; code?: number };
-    return { stdout: `${failed.stdout ?? ""}${failed.stderr ?? ""}`, code: failed.code ?? 1 };
-  }
-}
 
 let hasCreds = false;
 try {
