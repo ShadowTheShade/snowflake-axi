@@ -30,6 +30,21 @@ describe("cellValue / shapeRows", () => {
     expect(truncatedCells).toBe(1);
   });
 
+  it("coerces only columns flagged numeric, keeping leading zeros in text", () => {
+    const { rows } = shapeRows([{ CODE: "007", AMT: "12456789.00" }], {
+      maxCellChars: 200,
+      numericColumns: new Set(["AMT"]),
+    });
+    expect(rows[0].CODE).toBe("007");
+    expect(rows[0].AMT).toBe(12456789);
+  });
+
+  it("never coerces without numeric column metadata", () => {
+    expect(cellValue("00120", 200).value).toBe("00120");
+    expect(cellValue("42", 200).value).toBe("42");
+    expect(cellValue("42", 200, true).value).toBe(42);
+  });
+
   it("leaves cells alone with maxCellChars null", () => {
     const long = "x".repeat(300);
     expect(cellValue(long, null).value).toBe(long);

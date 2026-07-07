@@ -1,3 +1,4 @@
+import { AxiError } from "axi-sdk-js";
 import { parseFlags } from "../flags.js";
 import { cellValue } from "../format.js";
 import { loadConfig } from "../config.js";
@@ -24,7 +25,12 @@ async function creditsBy7d(): Promise<Map<string, number> | undefined> {
 }
 
 async function run(args: string[]): Promise<Record<string, unknown>> {
-  parseFlags("warehouses", args, {});
+  const { positionals } = parseFlags("warehouses", args, {});
+  if (positionals.length > 0) {
+    throw new AxiError("warehouses takes no arguments", "VALIDATION_ERROR", [
+      "Run `snowflake-axi warehouses`",
+    ]);
+  }
   const [show, credits] = await Promise.all([runQuery("SHOW WAREHOUSES"), creditsBy7d()]);
 
   if (show.rows.length === 0) {

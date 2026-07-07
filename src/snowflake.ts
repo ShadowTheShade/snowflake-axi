@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 export interface QueryResult {
   rows: Record<string, unknown>[];
   total: number;
+  numericColumns: Set<string>;
 }
 
 export interface QueryOptions {
@@ -103,16 +104,19 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
           return;
         }
         const total = statement.getNumRows();
+        const numericColumns = new Set(
+          (statement.getColumns() ?? []).filter((column) => column.isNumber()).map((column) => column.getName()),
+        );
         const wanted = options.maxRows === undefined ? total : Math.min(options.maxRows, total);
         const rows: Record<string, unknown>[] = [];
         if (wanted === 0) {
-          resolve({ rows, total });
+          resolve({ rows, total, numericColumns });
           return;
         }
         const stream = statement.streamRows({ start: 0, end: wanted - 1 });
         stream.on("data", (row: Record<string, unknown>) => rows.push(row));
         stream.on("error", (streamErr: Error) => reject(translateError(streamErr)));
-        stream.on("end", () => resolve({ rows, total }));
+        stream.on("end", () => resolve({ rows, total, numericColumns }));
       },
     });
   });

@@ -29,14 +29,17 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
 
   await runQuery(`ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = ${timeout}`);
   const started = Date.now();
-  const { rows, total } = await runQuery(sql, { maxRows: limit });
+  const { rows, total, numericColumns } = await runQuery(sql, { maxRows: limit });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
 
   if (total === 0) {
     return { count: "0 rows", elapsed };
   }
 
-  const { rows: shaped, truncatedCells } = shapeRows(rows, { maxCellChars: full ? null : CELL_LIMIT });
+  const { rows: shaped, truncatedCells } = shapeRows(rows, {
+    maxCellChars: full ? null : CELL_LIMIT,
+    numericColumns,
+  });
   const help: string[] = [];
   if (rows.length < total) {
     help.push(`Run with --limit ${Math.min(total, 1000)} to fetch more of the ${total} rows`);

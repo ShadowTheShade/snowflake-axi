@@ -14,7 +14,12 @@ export function humanBytes(bytes: number | null | undefined): string {
 
 const NUMERIC = /^-?\d+(\.\d+)?$/;
 
-/** Renders numeric strings as bare TOON numbers; '12456789.00' becomes 12456789. */
+/**
+ * Renders a numeric-column string (the driver fetches numbers as strings for
+ * precision) as a bare TOON number; '12456789.00' becomes 12456789. Only apply
+ * to columns whose Snowflake type is numeric, never to text columns, where
+ * values like '007' must keep their digits.
+ */
 export function coerceNumeric(value: unknown): unknown {
   if (typeof value !== "string" || !NUMERIC.test(value)) return value;
   const integerDigits = value.replace(/^-/, "").split(".")[0].length;
@@ -22,9 +27,13 @@ export function coerceNumeric(value: unknown): unknown {
   return Number(value);
 }
 
-export function cellValue(value: unknown, maxChars: number | null): { value: unknown; truncated: boolean } {
+export function cellValue(
+  value: unknown,
+  maxChars: number | null,
+  numeric = false,
+): { value: unknown; truncated: boolean } {
   if (value === null || value === undefined) return { value: "", truncated: false };
-  const coerced = coerceNumeric(value);
+  const coerced = numeric ? coerceNumeric(value) : value;
   if (typeof coerced === "number" || typeof coerced === "boolean") {
     return { value: coerced, truncated: false };
   }
@@ -37,13 +46,13 @@ export function cellValue(value: unknown, maxChars: number | null): { value: unk
 
 export function shapeRows(
   rows: Record<string, unknown>[],
-  options: { maxCellChars: number | null },
+  options: { maxCellChars: number | null; numericColumns?: Set<string> },
 ): { rows: Record<string, unknown>[]; truncatedCells: number } {
   let truncatedCells = 0;
   const shaped = rows.map((row) => {
     const out: Record<string, unknown> = {};
     for (const [key, raw] of Object.entries(row)) {
-      const { value, truncated } = cellValue(raw, options.maxCellChars);
+      const { value, truncated } = cellValue(raw, options.maxCellChars, options.numericColumns?.has(key));
       if (truncated) truncatedCells++;
       out[key] = value;
     }

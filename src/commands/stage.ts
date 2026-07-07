@@ -12,7 +12,11 @@ const STAGE_PATH = /^@[A-Za-z0-9_$.~/-]+$/;
 const FILE_FORMAT = /^[A-Za-z_][A-Za-z0-9_$.]*$/;
 const CELL_LIMIT = 200;
 
-function assertStagePath(raw: string | undefined, usage: string): string {
+function assertStagePath(positionals: string[], usage: string): string {
+  if (positionals.length > 1) {
+    throw new AxiError("Expected exactly one stage path", "VALIDATION_ERROR", [usage]);
+  }
+  const raw = positionals[0];
   if (!raw || !STAGE_PATH.test(raw)) {
     throw new AxiError(`Invalid stage path '${raw ?? ""}'`, "VALIDATION_ERROR", [usage]);
   }
@@ -21,7 +25,7 @@ function assertStagePath(raw: string | undefined, usage: string): string {
 
 async function list(args: string[]): Promise<Record<string, unknown>> {
   const { positionals, flags } = parseFlags("stage", args, LIST_FLAGS);
-  const path = assertStagePath(positionals[0], "Run `snowflake-axi stage @db.schema.stage[/prefix]`");
+  const path = assertStagePath(positionals, "Run `snowflake-axi stage @db.schema.stage[/prefix]`");
   const limit = intFlag(flags, "--limit", { fallback: 100, min: 1, max: 10000 });
 
   const { rows } = await runQuery(`LIST ${path}`);
@@ -48,7 +52,7 @@ async function list(args: string[]): Promise<Record<string, unknown>> {
 
 async function read(args: string[]): Promise<Record<string, unknown>> {
   const { positionals, flags } = parseFlags("stage read", args, READ_FLAGS);
-  const path = assertStagePath(positionals[0], "Run `snowflake-axi stage read @db.schema.stage/path/file --limit 5`");
+  const path = assertStagePath(positionals, "Run `snowflake-axi stage read @db.schema.stage/path/file --limit 5`");
   const limit = intFlag(flags, "--limit", { fallback: 5, min: 1, max: 100 });
   const full = flags["--full"] === true;
 
@@ -65,14 +69,17 @@ async function read(args: string[]): Promise<Record<string, unknown>> {
     ]);
   }
 
-  const { rows } = await runQuery(
+  const { rows, numericColumns } = await runQuery(
     `SELECT $1 AS RECORD FROM ${path} (FILE_FORMAT => '${format}') LIMIT ${limit}`,
     { maxRows: limit },
   );
   if (rows.length === 0) {
     return { file: path, format, count: "0 records in file" };
   }
-  const { rows: shaped, truncatedCells } = shapeRows(rows, { maxCellChars: full ? null : CELL_LIMIT });
+  const { rows: shaped, truncatedCells } = shapeRows(rows, {
+    maxCellChars: full ? null : CELL_LIMIT,
+    numericColumns,
+  });
   return {
     file: path,
     format,

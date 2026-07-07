@@ -72,6 +72,12 @@ describe("offline behaviors (no credentials required)", () => {
     expect(code).toBe(2);
     expect(stdout).toContain("Multiple statements");
   });
+
+  it("stray positional arguments are rejected with exit 2, before any connection", async () => {
+    const { stdout, code } = await cli(["warehouses", "BOGUS"]);
+    expect(code).toBe(2);
+    expect(stdout).toContain("VALIDATION_ERROR");
+  });
 });
 
 describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
@@ -104,6 +110,13 @@ describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
     const { stdout, code } = await cli(["query", "SELECT 1 AS X WHERE 1 = 0"]);
     expect(code).toBe(0);
     expect(stdout).toContain("count: 0 rows");
+  });
+
+  it("string cells keep their exact digits while numeric cells render bare", async () => {
+    const { stdout, code } = await cli(["query", "SELECT '007' AS CODE, 7.10 AS NUM"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("007");
+    expect(stdout).toMatch(/7\.1(?!\d)/);
   });
 
   it("query truncates long cells at 200 chars unless --full", async () => {

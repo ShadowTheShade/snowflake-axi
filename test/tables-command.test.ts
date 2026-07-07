@@ -58,6 +58,40 @@ describe("tables command", () => {
     expect(output.schemas).toEqual([{ name: "PUBLIC", tables: 47, size: "32.1GB" }]);
   });
 
+  it("applies --like to schema names at database scope", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [{ NAME: "RAW", TABLES: "3", BYTES: "1024" }], total: 1 });
+    const output = (await tablesCommand.run(["analytics_db", "--like", "raw"])) as Record<string, unknown>;
+    expect(runQuery.mock.calls[0][0]).toContain("TABLE_SCHEMA ILIKE ?");
+    expect(runQuery.mock.calls[0][1].binds).toEqual(["%raw%"]);
+    expect(output.schemas).toEqual([{ name: "RAW", tables: 3, size: "1KB" }]);
+  });
+
+  it("reports empty schema matches definitively at database scope", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    const output = (await tablesCommand.run(["analytics_db", "--like", "nope"])) as Record<string, unknown>;
+    expect(output.count).toBe("0 schemas with tables matching '%nope%'");
+  });
+
+  it("truncates the schema summary at --limit with a see-all hint", async () => {
+    runQuery.mockResolvedValueOnce({
+      rows: [
+        { NAME: "A", TABLES: "1", BYTES: "2048" },
+        { NAME: "B", TABLES: "1", BYTES: "1024" },
+      ],
+      total: 2,
+    });
+    const output = (await tablesCommand.run(["analytics_db", "--limit", "1"])) as Record<string, unknown>;
+    expect(output.schemas).toHaveLength(1);
+    expect((output.help as string[])[0]).toContain("--limit 2");
+  });
+
+  it("rejects --views at database scope before querying", async () => {
+    await expect(tablesCommand.run(["analytics_db", "--views"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
   it("reports empty scopes definitively", async () => {
     runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
     const output = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;

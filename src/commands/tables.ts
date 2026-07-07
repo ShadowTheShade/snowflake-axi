@@ -34,24 +34,40 @@ function likePattern(raw: string): string {
   return raw.includes("%") || raw.includes("_") ? raw : `%${raw}%`;
 }
 
-async function schemasSummary(database: string): Promise<Record<string, unknown>> {
+async function schemasSummary(
+  database: string,
+  options: { like?: string; limit: number },
+): Promise<Record<string, unknown>> {
+  const binds: string[] = [];
+  let filter = "";
+  if (options.like !== undefined) {
+    filter = " AND TABLE_SCHEMA ILIKE ?";
+    binds.push(likePattern(options.like));
+  }
   const { rows } = await runQuery(
     `SELECT TABLE_SCHEMA AS NAME, COUNT(*) AS TABLES, SUM(BYTES) AS BYTES
      FROM ${database}.INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA != 'INFORMATION_SCHEMA'
+     WHERE TABLE_SCHEMA != 'INFORMATION_SCHEMA'${filter}
      GROUP BY 1 ORDER BY 3 DESC NULLS LAST, 1`,
+    { binds },
   );
+  const matchLabel = options.like !== undefined ? ` matching '${likePattern(options.like)}'` : "";
   if (rows.length === 0) {
-    return { database, count: "0 schemas with tables" };
+    return { database, count: `0 schemas with tables${matchLabel}` };
+  }
+  const shown = rows.slice(0, options.limit);
+  const help = [`Run \`snowflake-axi tables ${database}.<schema>\` to list a schema's tables`];
+  if (shown.length < rows.length) {
+    help.unshift(`Run \`snowflake-axi tables ${database} --limit ${rows.length}\` for all ${rows.length} schemas`);
   }
   return {
     database,
-    schemas: rows.map((row) => ({
+    schemas: shown.map((row) => ({
       name: row.NAME,
       tables: Number(row.TABLES),
       size: humanBytes(row.BYTES === null ? null : Number(row.BYTES)),
     })),
-    help: [`Run \`snowflake-axi tables ${database}.<schema>\` to list a schema's tables`],
+    help,
   };
 }
 
@@ -61,6 +77,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   const scope = parseScope(positionals);
   const includeViews = flags["--views"] === true;
   const limit = intFlag(flags, "--limit", { fallback: 100, min: 1, max: 10000 });
+  const like = typeof flags["--like"] === "string" ? flags["--like"] : undefined;
 
   const database = scope.database ?? config.database?.toUpperCase();
   if (!database) {
@@ -68,18 +85,19 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
       "Run `snowflake-axi tables <db>[.<schema>]` or set SNOWFLAKE_DATABASE in the env file",
     ]);
   }
-  if (!scope.schema && scope.database) {
-    return schemasSummary(database);
-  }
-  const schema = scope.schema ?? config.schema?.toUpperCase();
+  const schema = scope.schema ?? (scope.database ? undefined : config.schema?.toUpperCase());
   if (!schema) {
-    return schemasSummary(database);
+    if (includeViews) {
+      throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
+        `Run \`snowflake-axi tables ${database}.<schema> --views\``,
+      ]);
+    }
+    return schemasSummary(database, { like, limit });
   }
 
-  const like = flags["--like"];
   const binds: string[] = [schema];
   let filter = "";
-  if (typeof like === "string") {
+  if (like !== undefined) {
     filter = " AND TABLE_NAME ILIKE ?";
     binds.push(likePattern(like));
   }
@@ -92,7 +110,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   );
 
   const scopeLabel = `${database}.${schema}`;
-  const matchLabel = typeof like === "string" ? ` matching '${likePattern(like)}'` : "";
+  const matchLabel = like !== undefined ? ` matching '${likePattern(like)}'` : "";
   const views = rows.filter((row) => row.KIND === "VIEW");
   const listed = includeViews ? rows : rows.filter((row) => row.KIND !== "VIEW");
 
@@ -133,8 +151,8 @@ scopes:
   db: schema summary for that database
   db.schema: tables in that schema
 flags:
-  --like <pattern>: filter by name, case-insensitive; bare words match as contains
-  --views: include views (adds a kind column)
+  --like <pattern>: filter tables (schema scope) or schemas (db scope), case-insensitive; bare words match as contains
+  --views: include views, adds a kind column (schema scope only)
   --limit <n>: max rows shown (default 100)
 examples:
   snowflake-axi tables

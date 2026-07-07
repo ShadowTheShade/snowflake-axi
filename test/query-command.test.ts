@@ -26,13 +26,21 @@ describe("query command", () => {
   it("sets the statement timeout and reports a definitive complete count", async () => {
     runQuery
       .mockResolvedValueOnce({ rows: [], total: 1 })
-      .mockResolvedValueOnce({ rows: [{ A: "1", B: "x" }], total: 1 });
+      .mockResolvedValueOnce({ rows: [{ A: "1", B: "x" }], total: 1, numericColumns: new Set(["A"]) });
     const output = (await queryCommand.run(["SELECT 1"])) as Record<string, unknown>;
     expect(runQuery.mock.calls[0][0]).toBe("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 60");
     expect(runQuery.mock.calls[1][1]).toEqual({ maxRows: 50 });
     expect(output.count).toBe("1 (complete)");
     expect(output.rows).toEqual([{ A: 1, B: "x" }]);
     expect(output.help).toBeUndefined();
+  });
+
+  it("keeps leading-zero strings intact for non-numeric columns", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [], total: 1 })
+      .mockResolvedValueOnce({ rows: [{ CODE: "007" }], total: 1, numericColumns: new Set() });
+    const output = (await queryCommand.run(["SELECT '007' AS CODE"])) as Record<string, unknown>;
+    expect(output.rows).toEqual([{ CODE: "007" }]);
   });
 
   it("reports partial counts with a raise-limit hint", async () => {

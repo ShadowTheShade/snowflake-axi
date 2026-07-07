@@ -47,14 +47,17 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
 
   const sql = `SELECT ${select} FROM ${name.fqn}${whereClause} LIMIT ${limit}`;
   assertReadOnly(sql);
-  const { rows } = await runQuery(sql, { maxRows: limit });
+  const { rows, numericColumns } = await runQuery(sql, { maxRows: limit });
 
   if (rows.length === 0) {
     const scope = whereClause ? ` matching --where in ${name.fqn}` : ` in ${name.fqn}`;
     return { table: name.fqn, count: `0 rows${scope}` };
   }
 
-  const { rows: shaped, truncatedCells } = shapeRows(rows, { maxCellChars: full ? null : CELL_LIMIT });
+  const { rows: shaped, truncatedCells } = shapeRows(rows, {
+    maxCellChars: full ? null : CELL_LIMIT,
+    numericColumns,
+  });
   return {
     table: name.fqn,
     rows: shaped,
