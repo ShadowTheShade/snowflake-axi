@@ -16,6 +16,7 @@ async function creditsBy7d(): Promise<Map<string, number> | undefined> {
          DATEADD('day', -7, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP()))
        GROUP BY 1`,
     );
+    if (rows.length === 0) return undefined;
     return new Map(rows.map((row) => [String(row.WAREHOUSE_NAME), Number(Number(row.CREDITS).toFixed(1))]));
   } catch {
     return undefined;
@@ -31,7 +32,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   }
   return {
     count: `${show.rows.length} warehouses`,
-    ...(credits === undefined ? { note: "credits_7d unavailable (role lacks MONITOR)" } : {}),
+    ...(credits === undefined ? { note: "credits_7d omitted: no metering history visible to this role" } : {}),
     warehouses: show.rows.map((row) => ({
       name: row.name,
       size: row.size,

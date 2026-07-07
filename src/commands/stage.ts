@@ -30,7 +30,7 @@ async function list(args: string[]): Promise<Record<string, unknown>> {
   }
   const totalBytes = rows.reduce((sum, row) => sum + Number(row.size ?? 0), 0);
   const shown = rows.slice(0, limit);
-  const help = [`Run \`snowflake-axi stage read ${path}/<file> --limit 5\` to peek rows`];
+  const help = [`Run \`snowflake-axi stage read ${path.replace(/\/+$/, "")}/<file> --limit 5\` to peek rows`];
   if (shown.length < rows.length) {
     help.unshift(`Showing ${shown.length} of ${rows.length}; rerun with --limit ${rows.length} for all`);
   }

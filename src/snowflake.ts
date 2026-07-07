@@ -70,7 +70,18 @@ function translateError(err: { message?: string; code?: string | number }): AxiE
       "Check SNOWFLAKE_USER and SNOWFLAKE_TOKEN (PAT) in the env file, and that the PAT has not expired",
     ]);
   }
-  return new AxiError(message.replace(/\s+/g, " ").trim(), "SNOWFLAKE_ERROR");
+  const compact = message.replace(/\s+/g, " ").trim();
+  if (/invalid identifier/i.test(compact)) {
+    return new AxiError(compact, "SNOWFLAKE_ERROR", [
+      "Run `snowflake-axi schema <table>` to check the column names",
+    ]);
+  }
+  if (/does not exist or not authorized/i.test(compact)) {
+    return new AxiError(compact, "SNOWFLAKE_ERROR", [
+      "Run `snowflake-axi tables --like <name>` to find the right table",
+    ]);
+  }
+  return new AxiError(compact, "SNOWFLAKE_ERROR");
 }
 
 /**
