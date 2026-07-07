@@ -41,8 +41,9 @@ snowflake-axi allow                         # write capabilities and their grant
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
 - Prefer `--fields`, `--like`, `--limit`, and piping through `grep`/`head` to keep output small.
-- Write commands are gated: on WRITE_NOT_ALLOWED, ask the user to run `snowflake-axi allow <capability>`
-  in their own terminal. Never grant capabilities yourself or edit the grants file.
+- Write commands are gated: on WRITE_NOT_ALLOWED, ask the user for permission in conversation.
+  Only after they explicitly agree, run `snowflake-axi allow <capability> --agent`.
+  Never grant without their approval, and never edit the grants file directly.
 
 Domain plugins in `~/.config/snowflake-axi/plugins/` may add further commands;
 run `snowflake-axi --help` to see the full surface when unsure.

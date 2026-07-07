@@ -36,10 +36,17 @@ describe("allow command", () => {
     });
   });
 
-  it("refuses to grant without an interactive terminal", async () => {
+  it("refuses to grant without an interactive terminal or --agent", async () => {
     setTty(undefined);
     await expect(allowCommand.run(["dbt.execute"])).rejects.toMatchObject({ code: "HUMAN_REQUIRED" });
     expect(readGrants()).toEqual(new Set());
+  });
+
+  it("grants without a terminal when the agent carries user approval", async () => {
+    setTty(undefined);
+    const output = (await allowCommand.run(["dbt.execute", "--agent"])) as Record<string, unknown>;
+    expect(output).toMatchObject({ capability: "dbt.execute", granted: true });
+    expect(readGrants()).toEqual(new Set(["dbt.execute"]));
   });
 
   it("grants from an interactive terminal and persists", async () => {

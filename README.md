@@ -27,14 +27,30 @@ Until published, install with `npm install && npm run build && npm link` from a 
 
 ## Configuration
 
-Credentials and defaults live in `~/.config/snowflake-axi/env` (process env overrides file values, never commit this file):
+Credentials live in `~/.config/snowflake-axi/env` (process env overrides file values, never commit this file).
+Three values are required:
 
 ```
 SNOWFLAKE_ACCOUNT=<account identifier>
 SNOWFLAKE_USER=<service user>
-SNOWFLAKE_TOKEN=<programmatic access token, used as password>
-SNOWFLAKE_ROLE=<read-only role>
-SNOWFLAKE_WRITE_ROLE=<role for gated write commands, optional>
+SNOWFLAKE_TOKEN=<programmatic access token>
+```
+
+Everything else comes from the Snowflake user's own defaults, which is the recommended place to manage access:
+
+```sql
+ALTER USER <service user> SET
+  DEFAULT_WAREHOUSE = <warehouse>,
+  DEFAULT_NAMESPACE = <db.schema>,
+  DEFAULT_SECONDARY_ROLES = ('ALL');  -- the tool can use every role granted to the user
+```
+
+With secondary roles set to ALL, granting and revoking Snowflake roles on the user is the single access control; the CLI needs no role configuration at all.
+
+Optional overrides for setups that want them pinned client-side:
+
+```
+SNOWFLAKE_ROLE=<primary role per request>
 SNOWFLAKE_WAREHOUSE=<warehouse>
 SNOWFLAKE_DATABASE=<default database>
 SNOWFLAKE_SCHEMA=<default schema>
@@ -59,14 +75,14 @@ Two independent layers keep everyday use read-only:
 
 Write statements through `query` are rejected with the SQL echoed back so an operator can run it manually; arbitrary DML/DDL is permanently out of scope.
 
-Specific write commands exist (currently `dbt execute`) but are disabled until a human opts in, MCP-style:
+Specific write commands exist (currently `dbt execute`) but are disabled until the user opts in, MCP-style:
 
-- `snowflake-axi allow dbt.execute` grants the capability, and refuses to run without an interactive terminal - an agent driving the CLI cannot grant itself anything.
-- Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user.
+- Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user in conversation.
+- Once the user agrees, the agent runs `snowflake-axi allow <capability> --agent`; the harness permission prompt for that command is the user's confirmation click.
+- Humans grant directly with `snowflake-axi allow <capability>` in an interactive terminal; without a terminal and without `--agent`, granting refuses.
 - `snowflake-axi allow <capability> --revoke` withdraws consent at any time.
 
-The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not security: the Snowflake role remains the hard boundary, so pair write capabilities with a role that has exactly the privileges you intend.
-Set `SNOWFLAKE_WRITE_ROLE` to keep that separation clean: gated write commands escalate to it, while every read keeps running as the read-only `SNOWFLAKE_ROLE`.
+The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not security: what the Snowflake user's roles allow remains the hard boundary, so grant the service user exactly the roles you intend an agent to reach.
 
 ## Commands
 

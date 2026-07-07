@@ -27,12 +27,12 @@ describe("grants", () => {
     expect(readFileSync(grantsFilePath(), "utf8")).toContain("# Write capabilities");
   });
 
-  it("requireGrant throws WRITE_NOT_ALLOWED telling the agent to ask the user", () => {
+  it("requireGrant throws WRITE_NOT_ALLOWED telling the agent to ask the user first", () => {
     expect(() => requireGrant("dbt.execute")).toThrowError(
       expect.objectContaining({
         code: "WRITE_NOT_ALLOWED",
         suggestions: expect.arrayContaining([
-          "Ask the user to run `snowflake-axi allow dbt.execute` in their own terminal",
+          "Ask the user for permission in conversation; once they agree, run `snowflake-axi allow dbt.execute --agent`",
         ]),
       }),
     );

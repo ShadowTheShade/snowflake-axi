@@ -46,7 +46,8 @@ export function writeGrants(grants: Set<string>): void {
 export function requireGrant(capability: string): void {
   if (readGrants().has(capability)) return;
   throw new AxiError(`Write capability '${capability}' is not granted`, "WRITE_NOT_ALLOWED", [
-    `Ask the user to run \`snowflake-axi allow ${capability}\` in their own terminal`,
-    "Grants are given by a human in an interactive terminal; do not grant capabilities yourself",
+    `Ask the user for permission in conversation; once they agree, run \`snowflake-axi allow ${capability} --agent\``,
+    `Or the user runs \`snowflake-axi allow ${capability}\` in their own terminal`,
+    "Never grant without the user's explicit approval",
   ]);
 }

@@ -36,10 +36,10 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
     return { capability, granted: false };
   }
 
-  if (!process.stdin.isTTY) {
-    throw new AxiError("Granting a write capability requires a human at an interactive terminal", "HUMAN_REQUIRED", [
-      `The user must run \`snowflake-axi allow ${capability}\` in their own shell`,
-      "Do not grant write capabilities on the user's behalf",
+  if (!process.stdin.isTTY && !args.bool("--agent")) {
+    throw new AxiError("Granting a write capability requires the user's approval", "HUMAN_REQUIRED", [
+      `Agents: ask the user in conversation first, then run \`snowflake-axi allow ${capability} --agent\` so the harness permission prompt confirms it`,
+      `Humans: run \`snowflake-axi allow ${capability}\` in an interactive terminal`,
     ]);
   }
   if (grants.has(capability)) return { capability, granted: true, note: "already granted (no-op)" };
@@ -49,17 +49,21 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
 }
 
 export const allowCommand = defineCommand("allow", {
-  summary: "Grant or revoke write capabilities (human, interactive terminal only)",
+  summary: "Grant or revoke write capabilities (needs the user's approval)",
   action: {
     description:
-      "List write capabilities, or grant one. Granting requires an interactive terminal so only a human can do it; revoking works anywhere.",
+      "List write capabilities, or grant one. Granting needs an interactive terminal (a human), or --agent after the user approved in conversation - the harness permission prompt for the command is their confirmation. Revoking works anywhere.",
     positionals: { usage: "[capability]", min: 0, max: 1 },
     flags: {
       "--revoke": { type: "boolean", description: "withdraw the capability instead of granting it" },
+      "--agent": {
+        type: "boolean",
+        description: "agent-initiated grant; only after the user explicitly approved in conversation",
+      },
     },
     notes: [
       "Grants persist in the config directory and gate every write command.",
-      "The Snowflake role remains the hard boundary; grants only express user consent.",
+      "Grants express user consent; what the Snowflake user's roles allow remains the hard boundary.",
     ],
     examples: ["snowflake-axi allow", "snowflake-axi allow dbt.execute", "snowflake-axi allow dbt.execute --revoke"],
     run,

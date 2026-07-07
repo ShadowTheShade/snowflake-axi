@@ -7,7 +7,6 @@ vi.mock("../src/config.js", async (importOriginal) => ({
     user: "SVC",
     token: "the-pat",
     role: "READER",
-    writeRole: "WRITER",
     warehouse: "WH",
     database: "DB",
     schema: "PUBLIC",
@@ -77,12 +76,12 @@ describe("runQuery over the SQL API", () => {
     });
   });
 
-  it("escalates to the write role only when asked", async () => {
-    fetchMock.mockResolvedValue(okResult());
-    await runQuery("EXECUTE DBT PROJECT P args='build'", { useWriteRole: true });
+  it("omits unset context so Snowflake user defaults apply", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
     await runQuery("SELECT 1");
-    const roles = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body).role);
-    expect(roles).toEqual(["WRITER", "READER"]);
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect("timeout" in body).toBe(false);
+    expect("bindings" in body).toBe(false);
   });
 
   it("fetches only the partitions maxRows needs while reporting the full total", async () => {
