@@ -5,11 +5,16 @@ import { loadConfig } from "../config.js";
 import { runQuery } from "../snowflake.js";
 import type { CommandSpec } from "../command.js";
 
+const FLAGS = { "--full": { takesValue: false } };
 const COMMENT_LIMIT = 100;
 
-async function creditsBy7d(): Promise<Map<string, number> | undefined> {
+type Metering = { credits: Map<string, number> } | { note: string };
+
+async function creditsBy7d(): Promise<Metering> {
   const config = loadConfig();
-  if (!config.database) return undefined;
+  if (!config.database) {
+    return { note: "credits_7d omitted: set SNOWFLAKE_DATABASE to enable the metering lookup" };
+  }
   try {
     const { rows } = await runQuery(
       `SELECT WAREHOUSE_NAME, SUM(CREDITS_USED) AS CREDITS
@@ -17,35 +22,51 @@ async function creditsBy7d(): Promise<Map<string, number> | undefined> {
          DATEADD('day', -7, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP()))
        GROUP BY 1`,
     );
-    if (rows.length === 0) return undefined;
-    return new Map(rows.map((row) => [String(row.WAREHOUSE_NAME), Number(Number(row.CREDITS).toFixed(1))]));
+    if (rows.length === 0) {
+      return {
+        note: "credits_7d omitted: no metering rows in the last 7 days (idle warehouses, or the role lacks MONITOR)",
+      };
+    }
+    return {
+      credits: new Map(rows.map((row) => [String(row.WAREHOUSE_NAME), Number(Number(row.CREDITS).toFixed(1))])),
+    };
   } catch {
-    return undefined;
+    return { note: "credits_7d omitted: the metering lookup failed for this role" };
   }
 }
 
 async function run(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals } = parseFlags("warehouses", args, {});
+  const { positionals, flags } = parseFlags("warehouses", args, FLAGS);
   if (positionals.length > 0) {
     throw new AxiError("warehouses takes no arguments", "VALIDATION_ERROR", [
       "Run `snowflake-axi warehouses`",
     ]);
   }
-  const [show, credits] = await Promise.all([runQuery("SHOW WAREHOUSES"), creditsBy7d()]);
+  const full = flags["--full"] === true;
+  const [show, metering] = await Promise.all([runQuery("SHOW WAREHOUSES"), creditsBy7d()]);
 
   if (show.rows.length === 0) {
     return { count: "0 warehouses visible to this role" };
   }
-  return {
-    count: `${show.rows.length} warehouses`,
-    ...(credits === undefined ? { note: "credits_7d omitted: no metering history visible to this role" } : {}),
-    warehouses: show.rows.map((row) => ({
+  let truncatedComments = 0;
+  const warehouses = show.rows.map((row) => {
+    const comment = cellValue(row.comment, full ? null : COMMENT_LIMIT);
+    if (comment.truncated) truncatedComments++;
+    return {
       name: row.name,
       size: row.size,
       state: row.state,
-      ...(credits === undefined ? {} : { credits_7d: credits.get(String(row.name)) ?? 0 }),
-      comment: cellValue(row.comment, COMMENT_LIMIT).value,
-    })),
+      ...("credits" in metering ? { credits_7d: metering.credits.get(String(row.name)) ?? 0 } : {}),
+      comment: comment.value,
+    };
+  });
+  return {
+    count: `${show.rows.length} warehouses`,
+    ...("note" in metering ? { note: metering.note } : {}),
+    warehouses,
+    ...(truncatedComments > 0
+      ? { help: [`${truncatedComments} comment(s) truncated at ${COMMENT_LIMIT} chars; rerun with --full`] }
+      : {}),
   };
 }
 
@@ -53,10 +74,13 @@ export const warehousesCommand: CommandSpec = {
   summary: "Warehouses with state and 7-day credit burn",
   help: `command: warehouses
 description: List warehouses with size, state, 7-day credit usage, and usage-guidance comments
-usage: snowflake-axi warehouses
+usage: snowflake-axi warehouses [flags]
+flags:
+  --full: disable ${COMMENT_LIMIT}-char comment truncation
 notes:
-  credits_7d comes from INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY; if the role
-  lacks MONITOR the column is omitted with a note instead of failing.
+  credits_7d comes from INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY and needs a
+  default database; when unavailable (no SNOWFLAKE_DATABASE, or the role lacks
+  MONITOR) the column is omitted with a note instead of failing.
 examples:
   snowflake-axi warehouses
 `,

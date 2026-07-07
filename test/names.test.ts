@@ -1,7 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.hoisted(() => vi.fn());
-vi.mock("../src/config.js", () => ({ loadConfig, envFilePath: () => "/tmp/env" }));
+vi.mock("../src/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/config.js")>()),
+  loadConfig,
+  envFilePath: () => "/tmp/env",
+}));
 
 import { resolveTableName } from "../src/names.js";
 

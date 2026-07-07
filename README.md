@@ -59,7 +59,7 @@ DML/DDL is permanently out of scope.
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
 | `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
-| `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments |
+| `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
 | `update` | Self-update (built into axi-sdk-js) |

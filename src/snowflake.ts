@@ -72,6 +72,11 @@ function translateError(err: { message?: string; code?: string | number }): AxiE
     ]);
   }
   const compact = message.replace(/\s+/g, " ").trim();
+  if (/statement or warehouse timeout/i.test(compact)) {
+    return new AxiError(compact, "TIMEOUT", [
+      "Rerun with a higher --timeout <seconds> or narrow the query",
+    ]);
+  }
   if (/invalid identifier/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", [
       "Run `snowflake-axi schema <table>` to check the column names",

@@ -1,7 +1,7 @@
 import { AxiError } from "axi-sdk-js";
-import { loadConfig } from "./config.js";
+import { IDENTIFIER, loadConfig } from "./config.js";
 
-export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+export { IDENTIFIER };
 
 export interface TableName {
   database: string;

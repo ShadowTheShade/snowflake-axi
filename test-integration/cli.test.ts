@@ -106,6 +106,18 @@ describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
     expect(stdout).toContain("count: 5 (complete)");
   });
 
+  it("statement timeouts translate to a TIMEOUT error with a --timeout hint", async () => {
+    const { stdout, code } = await cli([
+      "query",
+      "SELECT MAX(RANDOM()) FROM TABLE(GENERATOR(ROWCOUNT => 10000000000))",
+      "--timeout",
+      "1",
+    ]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("TIMEOUT");
+    expect(stdout).toContain("--timeout");
+  });
+
   it("query reports empty results definitively", async () => {
     const { stdout, code } = await cli(["query", "SELECT 1 AS X WHERE 1 = 0"]);
     expect(code).toBe(0);

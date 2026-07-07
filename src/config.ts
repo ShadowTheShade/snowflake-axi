@@ -3,6 +3,8 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
+
 export interface Config {
   account: string;
   user: string;
@@ -58,6 +60,14 @@ export function loadConfig(): Config {
       `Create ${envFilePath()} with SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_TOKEN (PAT)`,
       "Optional keys: SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA",
     ]);
+  }
+  for (const key of ["SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"]) {
+    const value = get(key);
+    if (value && !IDENTIFIER.test(value)) {
+      throw new AxiError(`Invalid ${key} '${value}': not an unquoted identifier`, "CONFIG_ERROR", [
+        `Fix ${key} in ${envFilePath()} (letters, digits, _ and $ only)`,
+      ]);
+    }
   }
   cached = {
     account: get("SNOWFLAKE_ACCOUNT")!,

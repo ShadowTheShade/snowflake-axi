@@ -31,7 +31,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
     size: humanBytes(info?.BYTES === null || info?.BYTES === undefined ? null : Number(info.BYTES)),
     columns: columns.rows.map((row) => ({
       name: row.name,
-      type: String(row.type).replace(",", "."),
+      type: row.type,
       null: row["null?"],
     })),
     help: [`Run \`snowflake-axi sample ${positionals[0]} --fields <a,b>\` to preview data`],
@@ -45,7 +45,6 @@ description: Columns with types and nullability, plus row count and size
 usage: snowflake-axi schema <table>
 notes:
   Table names resolve as table, schema.table, or db.schema.table against the configured defaults.
-  NUMBER(38.2) means NUMBER(38,2); the comma is dotted to keep TOON rows unquoted.
 examples:
   snowflake-axi schema FCT_ORDERS
   snowflake-axi schema ANALYTICS_DB.PUBLIC.DIM_CUSTOMERS

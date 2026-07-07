@@ -1,5 +1,5 @@
 import { AxiError } from "axi-sdk-js";
-import { loadConfig } from "../config.js";
+import { IDENTIFIER, loadConfig } from "../config.js";
 import { intFlag, parseFlags } from "../flags.js";
 import { humanBytes } from "../format.js";
 import { runQuery } from "../snowflake.js";
@@ -10,8 +10,6 @@ const FLAGS = {
   "--views": { takesValue: false },
   "--limit": { takesValue: true },
 };
-
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
 function parseScope(positionals: string[]): { database?: string; schema?: string } {
   if (positionals.length === 0) return {};
