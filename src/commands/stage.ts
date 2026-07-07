@@ -54,9 +54,14 @@ async function read(args: string[]): Promise<Record<string, unknown>> {
 
   const config = loadConfig();
   const format = typeof flags["--format"] === "string" ? flags["--format"] : config.defaultFileFormat;
-  if (!format || !FILE_FORMAT.test(format)) {
+  if (!format) {
     throw new AxiError("No named file format available", "VALIDATION_ERROR", [
       "Pass --format <db.schema.format> or set SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT in the env file",
+    ]);
+  }
+  if (!FILE_FORMAT.test(format)) {
+    throw new AxiError(`Invalid file format name '${format}'`, "VALIDATION_ERROR", [
+      "Use a plain identifier like MY_DB.MY_SCHEMA.MY_PARQUET_FORMAT",
     ]);
   }
 

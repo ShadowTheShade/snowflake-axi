@@ -57,6 +57,14 @@ function translateError(err: { message?: string; code?: string | number }): AxiE
       "Attach a network policy covering this machine's egress IP to the service user",
     ]);
   }
+  const blockedIp = message.match(/IP\/Token (\d+(?:\.\d+){3}).* not allowed to access Snowflake/)?.[1];
+  if (blockedIp) {
+    return new AxiError(
+      `Snowflake blocked this connection: egress IP ${blockedIp} is not in the user's network policy`,
+      "AUTH_ERROR",
+      [`Have an admin add ${blockedIp} to the network policy attached to the service user`],
+    );
+  }
   if (/incorrect username or password|authentication/i.test(message)) {
     return new AxiError("Snowflake authentication failed", "AUTH_ERROR", [
       "Check SNOWFLAKE_USER and SNOWFLAKE_TOKEN (PAT) in the env file, and that the PAT has not expired",
