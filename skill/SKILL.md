@@ -24,6 +24,8 @@ snowflake-axi tables                        # default schema's tables, largest f
 snowflake-axi tables MY_DB                  # schema summary for a database
 snowflake-axi tables MY_DB.MY_SCHEMA --like orders
 snowflake-axi find flavor                   # search tables/views by name, account-wide
+snowflake-axi semantics                     # semantic views: curated metric maps with verified queries
+snowflake-axi semantics MY_SV --like revenue  # one view's matching metrics, conventions, blessed SQL
 snowflake-axi schema MY_TABLE               # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT ..." --limit 50 # one read-only statement; total count always reported
@@ -40,6 +42,8 @@ snowflake-axi allow                         # write capabilities and their grant
 - Unqualified table names resolve against the Snowflake user's default namespace;
   if the user has none, qualify names fully (`DB.SCHEMA.TABLE`) - `tables` with no
   arguments then lists readable databases to drill into.
+- Before hand-writing SQL for metrics or KPIs, check `semantics`: semantic views carry
+  the team's routing rules, metric definitions, and human-verified queries.
 - `model` finds dbt models in projects around the working directory; run it from
   inside the dbt repo.
 - `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.

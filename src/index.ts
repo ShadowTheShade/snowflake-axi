@@ -10,6 +10,7 @@ import { queryCommand } from "./commands/query.js";
 import { resultCommand } from "./commands/result.js";
 import { sampleCommand } from "./commands/sample.js";
 import { schemaCommand } from "./commands/schema.js";
+import { semanticsCommand } from "./commands/semantics.js";
 import { stageCommand } from "./commands/stage.js";
 import { tablesCommand } from "./commands/tables.js";
 import { warehousesCommand } from "./commands/warehouses.js";
@@ -25,6 +26,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   sample: sampleCommand,
   query: queryCommand,
   result: resultCommand,
+  semantics: semanticsCommand,
   warehouses: warehousesCommand,
   model: modelCommand,
   dbt: dbtCommand,

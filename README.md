@@ -17,6 +17,7 @@ snowflake-axi schema MY_TABLE # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT COUNT(*) FROM MY_TABLE"
 snowflake-axi result 01b66701-0000-23c5-0000-45a100012345  # collect an earlier statement's output
+snowflake-axi semantics       # semantic views: the curated map of tables, metrics, verified queries
 snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
@@ -103,6 +104,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
 | `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
 | `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
+| `semantics [name]` | Semantic views account-wide; per view: tables, metrics, dimensions, custom instructions, verified queries (`--like` filters, `--sql <query>` prints blessed SQL) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
