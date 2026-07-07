@@ -1,9 +1,9 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { IDENTIFIER, loadConfig } from "../config.js";
 import { intFlag, parseFlags } from "../flags.js";
 import { humanBytes } from "../format.js";
 import { runQuery } from "../snowflake.js";
-import type { CommandSpec } from "../command.js";
 
 const FLAGS = {
   "--like": { takesValue: true },

@@ -1,13 +1,13 @@
-import { AxiError } from "axi-sdk-js";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "./command.js";
 import { configDir, loadConfig } from "./config.js";
 import { addMonthsEnd, lastCompletedMonthEnd, monthEnd } from "./dates.js";
 import { intFlag, parseFlags } from "./flags.js";
 import { money, pct, shapeRows } from "./format.js";
 import { runQuery } from "./snowflake.js";
-import type { CommandSpec } from "./command.js";
 
 export interface PluginApi {
   sql: typeof runQuery;

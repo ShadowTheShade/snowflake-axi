@@ -82,9 +82,7 @@ function scan(sql: string): ScanResult {
 export function assertReadOnly(sql: string): { head: string; sql: string } {
   const { head, multiStatement, stripped } = scan(sql);
   if (!head || stripped.length === 0) {
-    throw new AxiError("No SQL statement provided", "VALIDATION_ERROR", [
-      'Run `snowflake-axi query "SELECT ..."`',
-    ]);
+    throw new AxiError("No SQL statement provided", "VALIDATION_ERROR", ['Run `snowflake-axi query "SELECT ..."`']);
   }
   if (multiStatement) {
     throw new AxiError("Multiple statements are not allowed", "VALIDATION_ERROR", [

@@ -52,10 +52,7 @@ export function intFlag(
   if (raw === undefined) return options.fallback;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < options.min || value > options.max) {
-    throw new AxiError(
-      `Flag ${name} must be an integer between ${options.min} and ${options.max}`,
-      "VALIDATION_ERROR",
-    );
+    throw new AxiError(`Flag ${name} must be an integer between ${options.min} and ${options.max}`, "VALIDATION_ERROR");
   }
   return value;
 }

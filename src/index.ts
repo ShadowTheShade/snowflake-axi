@@ -1,5 +1,6 @@
-import { runAxiCli } from "axi-sdk-js";
 import { readFileSync } from "node:fs";
+import { runAxiCli } from "axi-sdk-js";
+import type { CommandSpec } from "./command.js";
 import { homeView } from "./commands/home.js";
 import { modelCommand } from "./commands/model.js";
 import { queryCommand } from "./commands/query.js";
@@ -11,7 +12,6 @@ import { warehousesCommand } from "./commands/warehouses.js";
 import { envFilePath } from "./config.js";
 import { loadPlugins } from "./plugins.js";
 import { closeConnection } from "./snowflake.js";
-import type { CommandSpec } from "./command.js";
 
 const DESCRIPTION = "Read-only Snowflake explorer for agents; TOON output, SELECT-only";
 

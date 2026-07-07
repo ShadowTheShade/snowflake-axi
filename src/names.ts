@@ -20,16 +20,17 @@ export function resolveTableName(raw: string): TableName {
   }
   const config = loadConfig();
   const upper = parts.map((p) => p.toUpperCase());
-  const [database, schema, table] =
+  const table = upper[upper.length - 1];
+  const [database, schema] =
     upper.length === 3
-      ? upper
+      ? [upper[0], upper[1]]
       : upper.length === 2
-        ? [config.database?.toUpperCase(), ...upper]
-        : [config.database?.toUpperCase(), config.schema?.toUpperCase(), upper[0]];
+        ? [config.database?.toUpperCase(), upper[0]]
+        : [config.database?.toUpperCase(), config.schema?.toUpperCase()];
   if (!database || !schema) {
     throw new AxiError(`Cannot resolve '${raw}' without a default database and schema`, "VALIDATION_ERROR", [
       "Qualify the name as db.schema.table or set SNOWFLAKE_DATABASE and SNOWFLAKE_SCHEMA in the env file",
     ]);
   }
-  return { database, schema, table: table!, fqn: `${database}.${schema}.${table}` };
+  return { database, schema, table, fqn: `${database}.${schema}.${table}` };
 }

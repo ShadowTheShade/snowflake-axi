@@ -1,9 +1,9 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { intFlag, parseFlags } from "../flags.js";
 import { shapeRows } from "../format.js";
 import { runQuery } from "../snowflake.js";
 import { assertReadOnly } from "../validate.js";
-import type { CommandSpec } from "../command.js";
 
 const FLAGS = {
   "--limit": { takesValue: true },
@@ -21,9 +21,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
 
   const rawSql = positionals.join(" ").trim();
   if (!rawSql) {
-    throw new AxiError("No SQL provided", "VALIDATION_ERROR", [
-      'Run `snowflake-axi query "SELECT ..."`',
-    ]);
+    throw new AxiError("No SQL provided", "VALIDATION_ERROR", ['Run `snowflake-axi query "SELECT ..."`']);
   }
   const { sql } = assertReadOnly(rawSql);
 

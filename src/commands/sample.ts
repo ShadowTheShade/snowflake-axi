@@ -1,10 +1,10 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { intFlag, parseFlags } from "../flags.js";
 import { shapeRows } from "../format.js";
 import { IDENTIFIER, resolveTableName } from "../names.js";
 import { runQuery } from "../snowflake.js";
 import { assertReadOnly } from "../validate.js";
-import type { CommandSpec } from "../command.js";
 
 const FLAGS = {
   "--limit": { takesValue: true },
@@ -19,7 +19,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   const { positionals, flags } = parseFlags("sample", args, FLAGS);
   if (positionals.length !== 1) {
     throw new AxiError("sample takes exactly one table name", "VALIDATION_ERROR", [
-      "Run `snowflake-axi sample <table> [--fields a,b] [--where \"<predicate>\"]`",
+      'Run `snowflake-axi sample <table> [--fields a,b] [--where "<predicate>"]`',
     ]);
   }
   const name = resolveTableName(positionals[0]);

@@ -1,10 +1,10 @@
-import { AxiError } from "axi-sdk-js";
-import { readFileSync, readdirSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { loadConfig } from "../config.js";
 import { parseFlags } from "../flags.js";
-import type { CommandSpec } from "../command.js";
 
 const FLAGS = { "--full": { takesValue: false } };
 const SQL_LIMIT = 1500;
@@ -76,9 +76,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
       .slice(0, 3);
     return {
       count: `0 models match '${query}' in ${config.modelDirs.map(collapseHome).join(", ")}`,
-      ...(nearest.length > 0
-        ? { help: nearest.map(({ m }) => `Did you mean: snowflake-axi model ${m.name}`) }
-        : {}),
+      ...(nearest.length > 0 ? { help: nearest.map(({ m }) => `Did you mean: snowflake-axi model ${m.name}`) } : {}),
     };
   }
   if (matches.length > 1) {

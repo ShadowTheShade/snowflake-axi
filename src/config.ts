@@ -1,7 +1,7 @@
-import { AxiError } from "axi-sdk-js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { AxiError } from "axi-sdk-js";
 import { parse as parseToml } from "smol-toml";
 
 export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
@@ -108,8 +108,17 @@ export function loadConfig(): Config {
   const file = parseEnvFile(envFilePath());
   const toml = snowCliConnection();
   const get = (key: string) => process.env[key] || file[key] || toml[key] || undefined;
-  const missing = ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_TOKEN"].filter((k) => !get(k));
-  if (missing.length > 0) {
+  const account = get("SNOWFLAKE_ACCOUNT");
+  const user = get("SNOWFLAKE_USER");
+  const token = get("SNOWFLAKE_TOKEN");
+  if (!account || !user || !token) {
+    const missing = [
+      ["SNOWFLAKE_ACCOUNT", account],
+      ["SNOWFLAKE_USER", user],
+      ["SNOWFLAKE_TOKEN", token],
+    ]
+      .filter(([, value]) => !value)
+      .map(([key]) => key);
     throw new AxiError(`Missing Snowflake credentials: ${missing.join(", ")}`, "CONFIG_ERROR", [
       `Create ${envFilePath()} with SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_TOKEN (PAT)`,
       "Or add a PAT connection to ~/.snowflake/connections.toml (shared with the snow CLI)",
@@ -125,17 +134,14 @@ export function loadConfig(): Config {
     }
   }
   cached = {
-    account: get("SNOWFLAKE_ACCOUNT")!,
-    user: get("SNOWFLAKE_USER")!,
-    token: get("SNOWFLAKE_TOKEN")!,
+    account,
+    user,
+    token,
     role: get("SNOWFLAKE_ROLE"),
     warehouse: get("SNOWFLAKE_WAREHOUSE"),
     database: get("SNOWFLAKE_DATABASE"),
     schema: get("SNOWFLAKE_SCHEMA"),
-    modelDirs: (get("SNOWFLAKE_AXI_MODEL_DIRS") ?? "")
-      .split(":")
-      .filter(Boolean)
-      .map(expandHome),
+    modelDirs: (get("SNOWFLAKE_AXI_MODEL_DIRS") ?? "").split(":").filter(Boolean).map(expandHome),
     defaultFileFormat: get("SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT"),
   };
   return cached;

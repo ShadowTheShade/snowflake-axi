@@ -12,16 +12,12 @@ function lastDayOf(year: number, monthIndex: number): string {
 export function monthEnd(period: string): string {
   const match = period.match(/^(\d{4})-(\d{2})(-\d{2})?$/);
   if (!match) {
-    throw new AxiError(`Invalid period '${period}'`, "VALIDATION_ERROR", [
-      "Use YYYY-MM (e.g. --period 2026-05)",
-    ]);
+    throw new AxiError(`Invalid period '${period}'`, "VALIDATION_ERROR", ["Use YYYY-MM (e.g. --period 2026-05)"]);
   }
   const year = Number(match[1]);
   const month = Number(match[2]);
   if (month < 1 || month > 12) {
-    throw new AxiError(`Invalid period '${period}'`, "VALIDATION_ERROR", [
-      "Use YYYY-MM (e.g. --period 2026-05)",
-    ]);
+    throw new AxiError(`Invalid period '${period}'`, "VALIDATION_ERROR", ["Use YYYY-MM (e.g. --period 2026-05)"]);
   }
   return lastDayOf(year, month - 1);
 }

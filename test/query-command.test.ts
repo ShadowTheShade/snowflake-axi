@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AxiError } from "axi-sdk-js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQuery = vi.hoisted(() => vi.fn());
 vi.mock("../src/snowflake.js", () => ({ runQuery }));

@@ -1,9 +1,9 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
+import { loadConfig } from "../config.js";
 import { parseFlags } from "../flags.js";
 import { cellValue } from "../format.js";
-import { loadConfig } from "../config.js";
 import { runQuery } from "../snowflake.js";
-import type { CommandSpec } from "../command.js";
 
 const FLAGS = { "--full": { takesValue: false } };
 const COMMENT_LIMIT = 100;
@@ -38,9 +38,7 @@ async function creditsBy7d(): Promise<Metering> {
 async function run(args: string[]): Promise<Record<string, unknown>> {
   const { positionals, flags } = parseFlags("warehouses", args, FLAGS);
   if (positionals.length > 0) {
-    throw new AxiError("warehouses takes no arguments", "VALIDATION_ERROR", [
-      "Run `snowflake-axi warehouses`",
-    ]);
+    throw new AxiError("warehouses takes no arguments", "VALIDATION_ERROR", ["Run `snowflake-axi warehouses`"]);
   }
   const full = flags["--full"] === true;
   const [show, metering] = await Promise.all([runQuery("SHOW WAREHOUSES"), creditsBy7d()]);

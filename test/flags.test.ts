@@ -1,5 +1,5 @@
+import type { AxiError } from "axi-sdk-js";
 import { describe, expect, it } from "vitest";
-import { AxiError } from "axi-sdk-js";
 import { intFlag, parseFlags } from "../src/flags.js";
 
 const KNOWN = { "--limit": { takesValue: true }, "--full": { takesValue: false } };

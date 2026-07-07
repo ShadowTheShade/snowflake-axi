@@ -1,9 +1,9 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { parseFlags } from "../flags.js";
 import { humanBytes } from "../format.js";
 import { resolveTableName } from "../names.js";
 import { runQuery } from "../snowflake.js";
-import type { CommandSpec } from "../command.js";
 
 async function run(args: string[]): Promise<Record<string, unknown>> {
   const { positionals } = parseFlags("schema", args, {});

@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { AxiError } from "axi-sdk-js";
+import { describe, expect, it } from "vitest";
 import { assertReadOnly } from "../src/validate.js";
 
 function codeOf(fn: () => unknown): string {
@@ -25,12 +25,21 @@ describe("assertReadOnly", () => {
     expect(assertReadOnly(sql).head).toBe(head);
   });
 
-  it.each(["UPDATE t SET a = 1", "DELETE FROM t", "INSERT INTO t VALUES (1)", "CREATE TABLE t (a INT)", "DROP TABLE t", "TRUNCATE TABLE t", "MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE", "CALL my_proc()", "COPY INTO t FROM @stage", "GRANT SELECT ON t TO ROLE r", "ALTER SESSION SET X = 1"])(
-    "rejects %s with READ_ONLY",
-    (sql) => {
-      expect(codeOf(() => assertReadOnly(sql))).toBe("READ_ONLY");
-    },
-  );
+  it.each([
+    "UPDATE t SET a = 1",
+    "DELETE FROM t",
+    "INSERT INTO t VALUES (1)",
+    "CREATE TABLE t (a INT)",
+    "DROP TABLE t",
+    "TRUNCATE TABLE t",
+    "MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE",
+    "CALL my_proc()",
+    "COPY INTO t FROM @stage",
+    "GRANT SELECT ON t TO ROLE r",
+    "ALTER SESSION SET X = 1",
+  ])("rejects %s with READ_ONLY", (sql) => {
+    expect(codeOf(() => assertReadOnly(sql))).toBe("READ_ONLY");
+  });
 
   it("skips leading comments in all three styles", () => {
     expect(assertReadOnly("-- comment\nSELECT 1").head).toBe("SELECT");

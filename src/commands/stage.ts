@@ -1,12 +1,16 @@
 import { AxiError } from "axi-sdk-js";
+import type { CommandSpec } from "../command.js";
 import { loadConfig } from "../config.js";
 import { intFlag, parseFlags } from "../flags.js";
 import { humanBytes, shapeRows } from "../format.js";
 import { runQuery } from "../snowflake.js";
-import type { CommandSpec } from "../command.js";
 
 const LIST_FLAGS = { "--limit": { takesValue: true } };
-const READ_FLAGS = { "--limit": { takesValue: true }, "--format": { takesValue: true }, "--full": { takesValue: false } };
+const READ_FLAGS = {
+  "--limit": { takesValue: true },
+  "--format": { takesValue: true },
+  "--full": { takesValue: false },
+};
 
 const STAGE_PATH = /^@[A-Za-z0-9_$.~/-]+$/;
 const FILE_FORMAT = /^[A-Za-z_][A-Za-z0-9_$.]*$/;

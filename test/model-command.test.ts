@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../src/config.js", () => ({ loadConfig, envFilePath: () => "/tmp/env" }));
