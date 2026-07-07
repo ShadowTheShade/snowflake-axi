@@ -55,6 +55,28 @@ describe("offline behaviors (no credentials required)", () => {
     expect(code).toBe(2);
     expect(stdout).toContain("VALIDATION_ERROR");
   });
+
+  it("write commands are refused without a grant, before any connection", async () => {
+    const { stdout, code } = await cli(["dbt", "execute", "ANYTHING", "--args", "build"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("WRITE_NOT_ALLOWED");
+    expect(stdout).toContain("allow dbt.execute");
+  });
+
+  it("granting a capability requires an interactive terminal", async () => {
+    const { stdout, code } = await cli(["allow", "dbt.execute"], { XDG_CONFIG_HOME: "/nonexistent-axi-config" });
+    expect(code).toBe(1);
+    expect(stdout).toContain("HUMAN_REQUIRED");
+  });
+
+  it("allow lists capabilities and their status offline", async () => {
+    const { stdout, code } = await cli(["allow"], { XDG_CONFIG_HOME: "/nonexistent-axi-config" });
+    expect(code).toBe(0);
+    expect(stdout).toContain("dbt.execute");
+    expect(stdout).toContain("false");
+  });
 });
 
 describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {

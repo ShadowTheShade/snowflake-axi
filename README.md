@@ -19,6 +19,7 @@ snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
 snowflake-axi stage @DB.SCHEMA.STAGE
+snowflake-axi allow           # write capabilities and their grant status
 snowflake-axi <command> --help
 ```
 
@@ -48,15 +49,22 @@ Only PAT connections are usable: a `token` with `authenticator = "PROGRAMMATIC_A
 Real passwords do not work (statements run over the SQL API, which takes the PAT as a bearer token); browser, SSO, OAuth, and key-pair connections are ignored.
 If you already use the snow CLI, snowflake-axi needs no configuration of its own.
 
-## Read-only by construction
+## Read-only by default, writes by consent
 
-Two independent layers:
+Two independent layers keep everyday use read-only:
 
 1. Run it as a service user whose role can only SELECT.
 2. `query` validates SQL before any connection is made: single statement only, head keyword must be SELECT, WITH, SHOW, DESC, DESCRIBE, or EXPLAIN.
 
-Write statements are rejected with the SQL echoed back so an operator can run it manually.
-DML/DDL is permanently out of scope.
+Write statements through `query` are rejected with the SQL echoed back so an operator can run it manually; arbitrary DML/DDL is permanently out of scope.
+
+Specific write commands exist (currently `dbt execute`) but are disabled until a human opts in, MCP-style:
+
+- `snowflake-axi allow dbt.execute` grants the capability, and refuses to run without an interactive terminal - an agent driving the CLI cannot grant itself anything.
+- Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user.
+- `snowflake-axi allow <capability> --revoke` withdraws consent at any time.
+
+The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not security: the Snowflake role remains the hard boundary, so pair write capabilities with a role that has exactly the privileges you intend.
 
 ## Commands
 
@@ -70,7 +78,9 @@ DML/DDL is permanently out of scope.
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
+| `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
+| `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
 | `update` | Self-update (built into axi-sdk-js) |
 
 ## Agent skill

@@ -4,7 +4,8 @@ description: >
   Read-only Snowflake access via the snowflake-axi CLI - list tables with row counts,
   inspect schemas, sample rows, run SELECT queries, check warehouse credit burn, read
   dbt model SQL, and peek staged parquet files. Use for ANY Snowflake read or discovery
-  task instead of an MCP tool or hand-rolled connector.
+  task instead of an MCP tool or hand-rolled connector. Writes (dbt execute) exist but
+  stay locked until the user grants them.
 user-invocable: false
 ---
 
@@ -29,8 +30,10 @@ snowflake-axi warehouses                    # states + 7-day credit burn + usage
 snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
 snowflake-axi dbt describe MY_PROJECT       # versions, source, target, integrations
+snowflake-axi dbt execute MY_PROJECT --args "build"   # write: locked until the user grants it
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
+snowflake-axi allow                         # write capabilities and their grant status
 ```
 
 - Unqualified table names resolve against the configured default database.schema.
@@ -38,6 +41,8 @@ snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
 - Prefer `--fields`, `--like`, `--limit`, and piping through `grep`/`head` to keep output small.
+- Write commands are gated: on WRITE_NOT_ALLOWED, ask the user to run `snowflake-axi allow <capability>`
+  in their own terminal. Never grant capabilities yourself or edit the grants file.
 
 Domain plugins in `~/.config/snowflake-axi/plugins/` may add further commands;
 run `snowflake-axi --help` to see the full surface when unsure.

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runAxiCli } from "axi-sdk-js";
 import type { CommandSpec } from "./command.js";
+import { allowCommand } from "./commands/allow.js";
 import { dbtCommand } from "./commands/dbt.js";
 import { homeView } from "./commands/home.js";
 import { modelCommand } from "./commands/model.js";
@@ -24,6 +25,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   model: modelCommand,
   dbt: dbtCommand,
   stage: stageCommand,
+  allow: allowCommand,
 };
 
 function topLevelHelp(specs: Record<string, CommandSpec>): string {

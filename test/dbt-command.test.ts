@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQuery = vi.hoisted(() => vi.fn());
 vi.mock("../src/snowflake.js", () => ({ runQuery }));
+const requireGrant = vi.hoisted(() => vi.fn());
+vi.mock("../src/grants.js", () => ({ requireGrant }));
 
 import { dbtCommand } from "../src/commands/dbt.js";
 
@@ -27,6 +29,7 @@ const OTHER_ROW = { ...PROJECT_ROW, name: "MY_PROJECT_DEV", schema_name: "DEV" }
 
 beforeEach(() => {
   runQuery.mockReset();
+  requireGrant.mockReset();
 });
 
 describe("dbt list", () => {
@@ -131,5 +134,58 @@ describe("dbt describe", () => {
     expect(output.comment).toBeUndefined();
     expect(output.target).toBeUndefined();
     expect(output.integrations).toBeUndefined();
+  });
+});
+
+describe("dbt execute", () => {
+  it("checks the write grant before anything else", async () => {
+    requireGrant.mockImplementation(() => {
+      throw Object.assign(new Error("Write capability 'dbt.execute' is not granted"), { code: "WRITE_NOT_ALLOWED" });
+    });
+    await expect(dbtCommand.run(["execute", "my_project", "--args", "build"])).rejects.toMatchObject({
+      code: "WRITE_NOT_ALLOWED",
+    });
+    expect(requireGrant).toHaveBeenCalledWith("dbt.execute");
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("requires --args before querying", async () => {
+    await expect(dbtCommand.run(["execute", "my_project"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("resolves the project and runs EXECUTE DBT PROJECT with escaped args", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [PROJECT_ROW], total: 1 })
+      .mockResolvedValueOnce({ rows: [{ dbt_output: "ok" }], total: 1 });
+    const output = (await dbtCommand.run(["execute", "my_project", "--args", "run --vars 'k: v'"])) as Record<
+      string,
+      unknown
+    >;
+    expect(runQuery.mock.calls[1][0]).toBe(
+      "EXECUTE DBT PROJECT STITCH_DB.METRICS.MY_PROJECT args='run --vars ''k: v'''",
+    );
+    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600 });
+    expect(output.project).toBe("STITCH_DB.METRICS.MY_PROJECT");
+    expect(output.rows).toEqual([{ dbt_output: "ok" }]);
+  });
+
+  it("errors on ambiguous names with full-name suggestions", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
+    await expect(dbtCommand.run(["execute", "usage", "--args", "build"])).rejects.toMatchObject({
+      code: "AMBIGUOUS",
+      suggestions: [
+        'snowflake-axi dbt execute STITCH_DB.METRICS.MY_PROJECT --args "build"',
+        'snowflake-axi dbt execute STITCH_DB.DEV.MY_PROJECT_DEV --args "build"',
+      ],
+    });
+    expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+
+  it("errors when no project matches", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    await expect(dbtCommand.run(["execute", "ghost", "--args", "build"])).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
   });
 });
