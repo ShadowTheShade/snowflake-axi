@@ -2,11 +2,9 @@ import { readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "../command.js";
+import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
-import { parseFlags } from "../flags.js";
 
-const FLAGS = { "--full": { takesValue: false } };
 const SQL_LIMIT = 1500;
 
 interface ModelFile {
@@ -50,13 +48,7 @@ function editDistance(a: string, b: string): number {
   return row[b.length];
 }
 
-async function run(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals, flags } = parseFlags("model", args, FLAGS);
-  if (positionals.length !== 1) {
-    throw new AxiError("model takes exactly one model name", "VALIDATION_ERROR", [
-      "Run `snowflake-axi model <name>` (dbt model filename, fuzzy contains match)",
-    ]);
-  }
+async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const config = loadConfig();
   if (config.modelDirs.length === 0) {
     throw new AxiError("No model directories configured", "CONFIG_ERROR", [
@@ -64,7 +56,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
     ]);
   }
 
-  const query = positionals[0].toLowerCase().replace(/\.sql$/, "");
+  const query = args.positionals[0].toLowerCase().replace(/\.sql$/, "");
   const models = listModels(config.modelDirs);
   const exact = models.filter((m) => m.name.toLowerCase() === query);
   const matches = exact.length > 0 ? exact : models.filter((m) => m.name.toLowerCase().includes(query));
@@ -89,7 +81,7 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
 
   const match = matches[0];
   const sql = readFileSync(match.path, "utf8");
-  const full = flags["--full"] === true;
+  const full = args.bool("--full");
   const truncated = !full && sql.length > SQL_LIMIT;
   return {
     model: match.name,
@@ -99,19 +91,19 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   };
 }
 
-export const modelCommand: CommandSpec = {
+export const modelCommand = defineCommand("model", {
   summary: "Show the dbt model SQL behind a table",
-  help: `command: model
-description: Find a dbt model by filename across the configured model directories and show its SQL
-usage: snowflake-axi model <name> [flags]
-flags:
-  --full: show the complete SQL (default truncates at ${SQL_LIMIT} chars)
-notes:
-  Matching is case-insensitive: exact filename first, then contains.
-  Directories come from SNOWFLAKE_AXI_MODEL_DIRS in the env file.
-examples:
-  snowflake-axi model stg_orders
-  snowflake-axi model fct_revenue --full
-`,
-  run,
-};
+  action: {
+    description: "Find a dbt model by filename across the configured model directories and show its SQL",
+    positionals: { usage: "<name>", min: 1, max: 1 },
+    flags: {
+      "--full": { type: "boolean", description: `show the complete SQL (default truncates at ${SQL_LIMIT} chars)` },
+    },
+    notes: [
+      "Matching is case-insensitive: exact filename first, then contains.",
+      "Directories come from SNOWFLAKE_AXI_MODEL_DIRS in the env file.",
+    ],
+    examples: ["snowflake-axi model stg_orders", "snowflake-axi model fct_revenue --full"],
+    run,
+  },
+});

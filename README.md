@@ -96,6 +96,7 @@ export default function myPlugin({ sql, config, AxiError, helpers }) {
 ```
 
 - `sql(text, { binds, maxRows })` runs a statement on the shared read-only connection and returns `{ rows, total }`.
+- `defineCommand(name, def)` builds a command declaratively: flags, positional arity, notes, and examples are declared once, and help text, validation, and flag errors are generated from them (this is how all core commands are built).
 - `helpers` provides `parseFlags`/`intFlag` (fail-loud flag parsing), month-end date math, and money/percent formatting.
 - Returned objects are rendered as TOON by the runtime; throw `AxiError(message, code, suggestions)` for structured errors.
 - Plugins cannot shadow core commands; broken plugins are skipped with a warning on stderr.

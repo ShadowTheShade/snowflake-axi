@@ -1,23 +1,11 @@
 import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "../command.js";
+import { type CommandArgs, defineCommand } from "../command.js";
 import { IDENTIFIER, loadConfig } from "../config.js";
-import { intFlag, parseFlags } from "../flags.js";
 import { humanBytes } from "../format.js";
 import { runQuery } from "../snowflake.js";
 
-const FLAGS = {
-  "--like": { takesValue: true },
-  "--views": { takesValue: false },
-  "--limit": { takesValue: true },
-};
-
 function parseScope(positionals: string[]): { database?: string; schema?: string } {
   if (positionals.length === 0) return {};
-  if (positionals.length > 1) {
-    throw new AxiError("tables takes at most one scope argument", "VALIDATION_ERROR", [
-      "Run `snowflake-axi tables [db[.schema]]`",
-    ]);
-  }
   const parts = positionals[0].split(".");
   if (parts.length > 2 || !parts.every((p) => IDENTIFIER.test(p))) {
     throw new AxiError(`Invalid scope '${positionals[0]}'`, "VALIDATION_ERROR", [
@@ -69,13 +57,12 @@ async function schemasSummary(
   };
 }
 
-async function run(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals, flags } = parseFlags("tables", args, FLAGS);
+async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const config = loadConfig();
-  const scope = parseScope(positionals);
-  const includeViews = flags["--views"] === true;
-  const limit = intFlag(flags, "--limit", { fallback: 100, min: 1, max: 10000 });
-  const like = typeof flags["--like"] === "string" ? flags["--like"] : undefined;
+  const scope = parseScope(args.positionals);
+  const includeViews = args.bool("--views");
+  const limit = args.int("--limit");
+  const like = args.str("--like");
 
   const database = scope.database ?? config.database?.toUpperCase();
   if (!database) {
@@ -139,23 +126,30 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   };
 }
 
-export const tablesCommand: CommandSpec = {
+export const tablesCommand = defineCommand("tables", {
   summary: "List tables with row counts and sizes; db scope lists schemas",
-  help: `command: tables
-description: List tables with row counts and sizes, largest first (INFORMATION_SCHEMA, no scan)
-usage: snowflake-axi tables [db[.schema]] [flags]
-scopes:
-  (none): tables in the configured default database.schema
-  db: schema summary for that database
-  db.schema: tables in that schema
-flags:
-  --like <pattern>: filter tables (schema scope) or schemas (db scope), case-insensitive; bare words match as contains
-  --views: include views, adds a kind column (schema scope only)
-  --limit <n>: max rows shown (default 100)
-examples:
-  snowflake-axi tables
-  snowflake-axi tables ANALYTICS_DB
-  snowflake-axi tables ANALYTICS_DB.PUBLIC --like fact
-`,
-  run,
-};
+  action: {
+    description: "List tables with row counts and sizes, largest first (INFORMATION_SCHEMA, no scan)",
+    positionals: { usage: "[db[.schema]]", min: 0, max: 1 },
+    flags: {
+      "--like": {
+        type: "string",
+        placeholder: "<pattern>",
+        description: "filter tables (schema scope) or schemas (db scope), case-insensitive; bare words match as contains",
+      },
+      "--views": { type: "boolean", description: "include views, adds a kind column (schema scope only)" },
+      "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
+    },
+    notes: [
+      "(no scope): tables in the configured default database.schema",
+      "db: schema summary for that database",
+      "db.schema: tables in that schema",
+    ],
+    examples: [
+      "snowflake-axi tables",
+      "snowflake-axi tables ANALYTICS_DB",
+      "snowflake-axi tables ANALYTICS_DB.PUBLIC --like fact",
+    ],
+    run,
+  },
+});

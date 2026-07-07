@@ -1,36 +1,23 @@
 import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "../command.js";
+import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
-import { intFlag, parseFlags } from "../flags.js";
 import { humanBytes, shapeRows } from "../format.js";
 import { runQuery } from "../snowflake.js";
-
-const LIST_FLAGS = { "--limit": { takesValue: true } };
-const READ_FLAGS = {
-  "--limit": { takesValue: true },
-  "--format": { takesValue: true },
-  "--full": { takesValue: false },
-};
 
 const STAGE_PATH = /^@[A-Za-z0-9_$.~/-]+$/;
 const FILE_FORMAT = /^[A-Za-z_][A-Za-z0-9_$.]*$/;
 const CELL_LIMIT = 200;
 
-function assertStagePath(positionals: string[], usage: string): string {
-  if (positionals.length > 1) {
-    throw new AxiError("Expected exactly one stage path", "VALIDATION_ERROR", [usage]);
-  }
-  const raw = positionals[0];
-  if (!raw || !STAGE_PATH.test(raw)) {
-    throw new AxiError(`Invalid stage path '${raw ?? ""}'`, "VALIDATION_ERROR", [usage]);
+function assertStagePath(raw: string, usage: string): string {
+  if (!STAGE_PATH.test(raw)) {
+    throw new AxiError(`Invalid stage path '${raw}'`, "VALIDATION_ERROR", [usage]);
   }
   return raw;
 }
 
-async function list(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals, flags } = parseFlags("stage", args, LIST_FLAGS);
-  const path = assertStagePath(positionals, "Run `snowflake-axi stage @db.schema.stage[/prefix]`");
-  const limit = intFlag(flags, "--limit", { fallback: 100, min: 1, max: 10000 });
+async function list(args: CommandArgs): Promise<Record<string, unknown>> {
+  const path = assertStagePath(args.positionals[0], "Run `snowflake-axi stage @db.schema.stage[/prefix]`");
+  const limit = args.int("--limit");
 
   const { rows } = await runQuery(`LIST ${path}`);
   if (rows.length === 0) {
@@ -54,14 +41,16 @@ async function list(args: string[]): Promise<Record<string, unknown>> {
   };
 }
 
-async function read(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals, flags } = parseFlags("stage read", args, READ_FLAGS);
-  const path = assertStagePath(positionals, "Run `snowflake-axi stage read @db.schema.stage/path/file --limit 5`");
-  const limit = intFlag(flags, "--limit", { fallback: 5, min: 1, max: 100 });
-  const full = flags["--full"] === true;
+async function read(args: CommandArgs): Promise<Record<string, unknown>> {
+  const path = assertStagePath(
+    args.positionals[0],
+    "Run `snowflake-axi stage read @db.schema.stage/path/file --limit 5`",
+  );
+  const limit = args.int("--limit");
+  const full = args.bool("--full");
 
   const config = loadConfig();
-  const format = typeof flags["--format"] === "string" ? flags["--format"] : config.defaultFileFormat;
+  const format = args.str("--format") ?? config.defaultFileFormat;
   if (!format) {
     throw new AxiError("No named file format available", "VALIDATION_ERROR", [
       "Pass --format <db.schema.format> or set SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT in the env file",
@@ -94,27 +83,34 @@ async function read(args: string[]): Promise<Record<string, unknown>> {
   };
 }
 
-async function run(args: string[]): Promise<Record<string, unknown>> {
-  if (args[0] === "read") {
-    return read(args.slice(1));
-  }
-  return list(args);
-}
-
-export const stageCommand: CommandSpec = {
+export const stageCommand = defineCommand("stage", {
   summary: "List stage files or peek rows from staged parquet/CSV files",
-  help: `command: stage
-description: List files in a stage, or read records from a staged file via a named file format
-usage:
-  snowflake-axi stage @db.schema.stage[/prefix] [--limit <n>]
-  snowflake-axi stage read @db.schema.stage/path/file [flags]
-flags (read):
-  --limit <n>: records to fetch (default 5, max 100)
-  --format <name>: named file format (default from SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT)
-  --full: disable 200-char record truncation
-examples:
-  snowflake-axi stage @ANALYTICS_DB.RAW.EVENTS_STAGE
-  snowflake-axi stage read @ANALYTICS_DB.RAW.EVENTS_STAGE/2026/file.parquet --limit 3
-`,
-  run,
-};
+  description: "List files in a stage, or read records from a staged file via a named file format",
+  defaultSubcommand: "list",
+  subcommands: {
+    list: {
+      description: "List files under a stage path",
+      positionals: { usage: "@db.schema.stage[/prefix]", min: 1, max: 1 },
+      flags: {
+        "--limit": { type: "int", placeholder: "<n>", description: "max files shown", default: 100, min: 1, max: 10000 },
+      },
+      examples: ["snowflake-axi stage @ANALYTICS_DB.RAW.EVENTS_STAGE"],
+      run: list,
+    },
+    read: {
+      description: "Read records from a staged file via a named file format",
+      positionals: { usage: "@db.schema.stage/path/file", min: 1, max: 1 },
+      flags: {
+        "--limit": { type: "int", placeholder: "<n>", description: "records to fetch", default: 5, min: 1, max: 100 },
+        "--format": {
+          type: "string",
+          placeholder: "<name>",
+          description: "named file format (default from SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT)",
+        },
+        "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char record truncation` },
+      },
+      examples: ["snowflake-axi stage read @ANALYTICS_DB.RAW.EVENTS_STAGE/2026/file.parquet --limit 3"],
+      run: read,
+    },
+  },
+});

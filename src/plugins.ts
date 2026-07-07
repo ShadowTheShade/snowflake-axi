@@ -2,7 +2,7 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "./command.js";
+import { type CommandSpec, defineCommand } from "./command.js";
 import { configDir, loadConfig } from "./config.js";
 import { addMonthsEnd, lastCompletedMonthEnd, monthEnd } from "./dates.js";
 import { intFlag, parseFlags } from "./flags.js";
@@ -13,6 +13,8 @@ export interface PluginApi {
   sql: typeof runQuery;
   config: typeof loadConfig;
   AxiError: typeof AxiError;
+  /** Declarative command builder; hand-written {summary, help, run} specs remain supported. */
+  defineCommand: typeof defineCommand;
   helpers: {
     parseFlags: typeof parseFlags;
     intFlag: typeof intFlag;
@@ -39,6 +41,7 @@ const api: PluginApi = {
   sql: runQuery,
   config: loadConfig,
   AxiError,
+  defineCommand,
   helpers: { parseFlags, intFlag, monthEnd, addMonthsEnd, lastCompletedMonthEnd, money, pct, shapeRows },
 };
 

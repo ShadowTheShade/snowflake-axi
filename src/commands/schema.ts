@@ -1,18 +1,10 @@
-import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "../command.js";
-import { parseFlags } from "../flags.js";
+import { type CommandArgs, defineCommand } from "../command.js";
 import { humanBytes } from "../format.js";
 import { resolveTableName } from "../names.js";
 import { runQuery } from "../snowflake.js";
 
-async function run(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals } = parseFlags("schema", args, {});
-  if (positionals.length !== 1) {
-    throw new AxiError("schema takes exactly one table name", "VALIDATION_ERROR", [
-      "Run `snowflake-axi schema <table>`",
-    ]);
-  }
-  const name = resolveTableName(positionals[0]);
+async function run(args: CommandArgs): Promise<Record<string, unknown>> {
+  const name = resolveTableName(args.positionals[0]);
 
   const [columns, meta] = await Promise.all([
     runQuery(`DESC TABLE ${name.fqn}`),
@@ -34,20 +26,17 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
       type: row.type,
       null: row["null?"],
     })),
-    help: [`Run \`snowflake-axi sample ${positionals[0]} --fields <a,b>\` to preview data`],
+    help: [`Run \`snowflake-axi sample ${args.positionals[0]} --fields <a,b>\` to preview data`],
   };
 }
 
-export const schemaCommand: CommandSpec = {
+export const schemaCommand = defineCommand("schema", {
   summary: "Columns, types, row count, and size for a table or view",
-  help: `command: schema
-description: Columns with types and nullability, plus row count and size
-usage: snowflake-axi schema <table>
-notes:
-  Table names resolve as table, schema.table, or db.schema.table against the configured defaults.
-examples:
-  snowflake-axi schema FCT_ORDERS
-  snowflake-axi schema ANALYTICS_DB.PUBLIC.DIM_CUSTOMERS
-`,
-  run,
-};
+  action: {
+    description: "Columns with types and nullability, plus row count and size",
+    positionals: { usage: "<table>", min: 1, max: 1 },
+    notes: ["Table names resolve as table, schema.table, or db.schema.table against the configured defaults."],
+    examples: ["snowflake-axi schema FCT_ORDERS", "snowflake-axi schema ANALYTICS_DB.PUBLIC.DIM_CUSTOMERS"],
+    run,
+  },
+});

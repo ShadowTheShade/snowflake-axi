@@ -1,11 +1,8 @@
-import { AxiError } from "axi-sdk-js";
-import type { CommandSpec } from "../command.js";
+import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
-import { parseFlags } from "../flags.js";
 import { cellValue } from "../format.js";
 import { runQuery } from "../snowflake.js";
 
-const FLAGS = { "--full": { takesValue: false } };
 const COMMENT_LIMIT = 100;
 
 type Metering = { credits: Map<string, number> } | { note: string };
@@ -35,12 +32,8 @@ async function creditsBy7d(): Promise<Metering> {
   }
 }
 
-async function run(args: string[]): Promise<Record<string, unknown>> {
-  const { positionals, flags } = parseFlags("warehouses", args, FLAGS);
-  if (positionals.length > 0) {
-    throw new AxiError("warehouses takes no arguments", "VALIDATION_ERROR", ["Run `snowflake-axi warehouses`"]);
-  }
-  const full = flags["--full"] === true;
+async function run(args: CommandArgs): Promise<Record<string, unknown>> {
+  const full = args.bool("--full");
   const [show, metering] = await Promise.all([runQuery("SHOW WAREHOUSES"), creditsBy7d()]);
 
   if (show.rows.length === 0) {
@@ -68,19 +61,19 @@ async function run(args: string[]): Promise<Record<string, unknown>> {
   };
 }
 
-export const warehousesCommand: CommandSpec = {
+export const warehousesCommand = defineCommand("warehouses", {
   summary: "Warehouses with state and 7-day credit burn",
-  help: `command: warehouses
-description: List warehouses with size, state, 7-day credit usage, and usage-guidance comments
-usage: snowflake-axi warehouses [flags]
-flags:
-  --full: disable ${COMMENT_LIMIT}-char comment truncation
-notes:
-  credits_7d comes from INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY and needs a
-  default database; when unavailable (no SNOWFLAKE_DATABASE, or the role lacks
-  MONITOR) the column is omitted with a note instead of failing.
-examples:
-  snowflake-axi warehouses
-`,
-  run,
-};
+  action: {
+    description: "List warehouses with size, state, 7-day credit usage, and usage-guidance comments",
+    flags: {
+      "--full": { type: "boolean", description: `disable ${COMMENT_LIMIT}-char comment truncation` },
+    },
+    notes: [
+      "credits_7d comes from INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY and needs a",
+      "default database; when unavailable (no SNOWFLAKE_DATABASE, or the role lacks",
+      "MONITOR) the column is omitted with a note instead of failing.",
+    ],
+    examples: ["snowflake-axi warehouses"],
+    run,
+  },
+});
