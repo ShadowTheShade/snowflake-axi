@@ -126,7 +126,7 @@ npm run test:integration # end-to-end: runs the built CLI as a subprocess agains
 The integration suite works against **any Snowflake account**: it touches only universal objects (`GENERATOR` table functions, the shared `SNOWFLAKE` database, `INFORMATION_SCHEMA`, `SHOW`), needs no fixtures or write access, and skips the live tests automatically when no credentials are configured.
 It covers what unit tests cannot: real SQL compilation, SQL API response shapes, partial fetches and total counts, error translation, and exit codes.
 
-CI (`.github/workflows/ci.yml`) runs the build, the unit suite, and the credential-free half of the integration suite on Node 20 and 24.
+CI (`.github/workflows/ci.yml`) runs the build, the unit suite, and the credential-free half of the integration suite on Node 22 and 24.
 
 `test-integration/docs.test.ts` is the doc drift guard: every `snowflake-axi` example in this README and in `skill/SKILL.md` runs against the built CLI without credentials, and an exit code of 2 (usage error) fails the build - so a renamed flag or removed command cannot leave stale docs behind.
 It also asserts that every core command appears in the skill and that every flag the docs mention exists in a command's `--help`.
