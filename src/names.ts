@@ -34,3 +34,26 @@ export function resolveTableName(raw: string): TableName {
   }
   return { database, schema, table, fqn: `${database}.${schema}.${table}` };
 }
+
+export interface Scope {
+  database?: string;
+  schema?: string;
+}
+
+/** Parses an optional `db` or `db.schema` scope argument into uppercase identifiers. */
+export function parseScope(raw: string | undefined): Scope {
+  if (raw === undefined) return {};
+  const parts = raw.split(".");
+  if (parts.length > 2 || !parts.every((p) => IDENTIFIER.test(p))) {
+    throw new AxiError(`Invalid scope '${raw}'`, "VALIDATION_ERROR", [
+      "Use `db` or `db.schema` with unquoted identifiers",
+    ]);
+  }
+  const [database, schema] = parts.map((p) => p.toUpperCase());
+  return { database, schema };
+}
+
+/** Bare words match as contains; patterns with wildcards pass through. */
+export function likePattern(raw: string): string {
+  return raw.includes("%") || raw.includes("_") ? raw : `%${raw}%`;
+}

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { runAxiCli } from "axi-sdk-js";
 import type { CommandSpec } from "./command.js";
+import { dbtCommand } from "./commands/dbt.js";
 import { homeView } from "./commands/home.js";
 import { modelCommand } from "./commands/model.js";
 import { queryCommand } from "./commands/query.js";
@@ -22,6 +23,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   query: queryCommand,
   warehouses: warehousesCommand,
   model: modelCommand,
+  dbt: dbtCommand,
   stage: stageCommand,
 };
 

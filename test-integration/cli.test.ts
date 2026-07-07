@@ -151,6 +151,18 @@ describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
     expect(stdout).toContain("warehouses");
   });
 
+  it("dbt lists projects account-wide or reports zero definitively", async () => {
+    const { stdout, code } = await cli(["dbt"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("dbt projects");
+  });
+
+  it("dbt describe of a missing project is definitive with a list suggestion", async () => {
+    const { stdout, code } = await cli(["dbt", "describe", "NO_SUCH_PROJECT_XYZ"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("0 dbt projects match");
+  });
+
   it("invalid identifier errors carry a schema-lookup suggestion", async () => {
     const { stdout, code } = await cli(["query", "SELECT NO_SUCH_COLUMN FROM SNOWFLAKE.INFORMATION_SCHEMA.DATABASES"]);
     expect(code).toBe(1);

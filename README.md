@@ -15,7 +15,8 @@ snowflake-axi schema MY_TABLE # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT COUNT(*) FROM MY_TABLE"
 snowflake-axi warehouses      # states + 7-day credit burn
-snowflake-axi model my_model  # dbt model SQL behind a table
+snowflake-axi model my_model  # local dbt model SQL behind a table
+snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
 snowflake-axi stage @DB.SCHEMA.STAGE
 snowflake-axi <command> --help
 ```
@@ -67,6 +68,7 @@ DML/DDL is permanently out of scope.
 | `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
+| `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
 | `update` | Self-update (built into axi-sdk-js) |
 

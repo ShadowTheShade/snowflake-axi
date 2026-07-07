@@ -1,24 +1,9 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { IDENTIFIER, loadConfig } from "../config.js";
+import { loadConfig } from "../config.js";
 import { humanBytes } from "../format.js";
+import { likePattern, parseScope } from "../names.js";
 import { runQuery } from "../snowflake.js";
-
-function parseScope(positionals: string[]): { database?: string; schema?: string } {
-  if (positionals.length === 0) return {};
-  const parts = positionals[0].split(".");
-  if (parts.length > 2 || !parts.every((p) => IDENTIFIER.test(p))) {
-    throw new AxiError(`Invalid scope '${positionals[0]}'`, "VALIDATION_ERROR", [
-      "Use `db` or `db.schema` with unquoted identifiers",
-    ]);
-  }
-  const [database, schema] = parts.map((p) => p.toUpperCase());
-  return { database, schema };
-}
-
-function likePattern(raw: string): string {
-  return raw.includes("%") || raw.includes("_") ? raw : `%${raw}%`;
-}
 
 async function schemasSummary(
   database: string,
@@ -59,7 +44,7 @@ async function schemasSummary(
 
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const config = loadConfig();
-  const scope = parseScope(args.positionals);
+  const scope = parseScope(args.positionals[0]);
   const includeViews = args.bool("--views");
   const limit = args.int("--limit");
   const like = args.str("--like");

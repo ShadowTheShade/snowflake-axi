@@ -26,7 +26,9 @@ snowflake-axi schema MY_TABLE               # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT ..." --limit 50 # one read-only statement; total count always reported
 snowflake-axi warehouses                    # states + 7-day credit burn + usage guidance
-snowflake-axi model my_model                # dbt model SQL behind a table
+snowflake-axi model my_model                # local dbt model SQL behind a table
+snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
+snowflake-axi dbt describe MY_PROJECT       # versions, source, target, integrations
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
 ```
