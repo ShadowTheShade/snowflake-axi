@@ -50,10 +50,14 @@ The Snowflake user is the recommended place to manage all of it:
 ALTER USER <service user> SET
   DEFAULT_WAREHOUSE = <warehouse>,
   DEFAULT_NAMESPACE = <db.schema>,
-  DEFAULT_SECONDARY_ROLES = ('ALL');  -- the tool can use every role granted to the user
+  DEFAULT_ROLE = <role>,
+  DEFAULT_SECONDARY_ROLES = ();  -- one explicit role per statement
 ```
 
-With secondary roles set to ALL, granting and revoking Snowflake roles on the user is the single access control; the CLI needs no role configuration at all.
+Granting and revoking Snowflake roles on the user is the single access control; the CLI needs no role configuration at all.
+Statements run as the user's `DEFAULT_ROLE`, and `--role <name>` on `query` and `dbt execute` runs a single statement as another granted role, so privileges stay explicit per action.
+If you prefer every statement to carry the union of all granted roles instead, set `DEFAULT_SECONDARY_ROLES = ('ALL')`.
+Either way the PAT must be minted without `ROLE_RESTRICTION`: a role-restricted token pins every session to that one role and disables secondary roles entirely.
 
 Optional overrides for setups that want them pinned client-side:
 
@@ -102,13 +106,13 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `find <pattern>` | Search tables and views by name across every database the roles can see |
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
-| `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
+| `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout`, one-off `--warehouse` / `--role` |
 | `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
 | `semantics [name]` | Semantic views account-wide; per view: tables, metrics, dimensions, custom instructions, verified queries (`--like` filters, `--sql <query>` prints blessed SQL) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
-| `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant |
+| `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant; `--role` when the default role cannot execute it |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
 | `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
 | `update` | Self-update (built into axi-sdk-js) |

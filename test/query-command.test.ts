@@ -26,10 +26,21 @@ describe("query command", () => {
   it("passes the statement timeout and reports a definitive complete count", async () => {
     runQuery.mockResolvedValueOnce({ rows: [{ A: "1", B: "x" }], total: 1, numericColumns: new Set(["A"]) });
     const output = (await queryCommand.run(["SELECT 1"])) as Record<string, unknown>;
-    expect(runQuery.mock.calls[0][1]).toEqual({ maxRows: 50, timeoutSeconds: 60, warehouse: undefined });
+    expect(runQuery.mock.calls[0][1]).toEqual({
+      maxRows: 50,
+      timeoutSeconds: 60,
+      warehouse: undefined,
+      role: undefined,
+    });
     expect(output.count).toBe("1 (complete)");
     expect(output.rows).toEqual([{ A: 1, B: "x" }]);
     expect(output.help).toBeUndefined();
+  });
+
+  it("passes a one-off role switch through to the query", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    await queryCommand.run(["SELECT 1", "--role", "OTHER_ROLE"]);
+    expect(runQuery.mock.calls[0][1]).toMatchObject({ role: "OTHER_ROLE" });
   });
 
   it("keeps leading-zero strings intact for non-numeric columns", async () => {

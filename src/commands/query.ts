@@ -20,6 +20,7 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
     maxRows: limit,
     timeoutSeconds: timeout,
     warehouse: args.str("--warehouse"),
+    role: args.str("--role"),
   });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
   return { ...presentRows(result, full), elapsed };
@@ -52,6 +53,11 @@ export const queryCommand = defineCommand("query", {
         type: "string",
         placeholder: "<name>",
         description: "run this statement on a specific warehouse instead of the user's default",
+      },
+      "--role": {
+        type: "string",
+        placeholder: "<name>",
+        description: "run this statement as another role granted to the user, instead of the default role",
       },
     },
     notes: [

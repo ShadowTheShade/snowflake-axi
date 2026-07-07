@@ -165,9 +165,18 @@ describe("dbt execute", () => {
     expect(runQuery.mock.calls[1][0]).toBe(
       "EXECUTE DBT PROJECT STITCH_DB.METRICS.MY_PROJECT args='run --vars ''k: v'''",
     );
-    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600 });
+    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600, role: undefined });
     expect(output.project).toBe("STITCH_DB.METRICS.MY_PROJECT");
     expect(output.rows).toEqual([{ dbt_output: "ok" }]);
+  });
+
+  it("runs both the lookup and the execution under --role", async () => {
+    runQuery
+      .mockResolvedValueOnce({ rows: [PROJECT_ROW], total: 1 })
+      .mockResolvedValueOnce({ rows: [{ dbt_output: "ok" }], total: 1 });
+    await dbtCommand.run(["execute", "my_project", "--args", "build", "--role", "ANALYTICS_ROLE"]);
+    expect(runQuery.mock.calls[0][1]).toEqual({ role: "ANALYTICS_ROLE" });
+    expect(runQuery.mock.calls[1][1]).toEqual({ timeoutSeconds: 3600, role: "ANALYTICS_ROLE" });
   });
 
   it("errors on ambiguous names with full-name suggestions", async () => {

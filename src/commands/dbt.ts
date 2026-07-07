@@ -19,9 +19,9 @@ function scopeLabel(scope: Scope): string {
   return "account";
 }
 
-async function showProjects(like: string | undefined, scope: Scope): Promise<Record<string, unknown>[]> {
+async function showProjects(like: string | undefined, scope: Scope, role?: string): Promise<Record<string, unknown>[]> {
   const likeClause = like === undefined ? "" : ` LIKE '${like}'`;
-  const { rows } = await runQuery(`SHOW DBT PROJECTS${likeClause}${scopeClause(scope)}`);
+  const { rows } = await runQuery(`SHOW DBT PROJECTS${likeClause}${scopeClause(scope)}`, { role });
   return rows;
 }
 
@@ -108,13 +108,14 @@ function parseProjectName(raw: string): string[] {
 // Bare names resolve account-wide, exact match first, then contains.
 async function findProject(
   upper: string[],
+  role?: string,
 ): Promise<{ match?: Record<string, unknown>; label: string; matches: Record<string, unknown>[] }> {
   if (upper.length === 3) {
-    const rows = await showProjects(upper[2], { database: upper[0], schema: upper[1] });
+    const rows = await showProjects(upper[2], { database: upper[0], schema: upper[1] }, role);
     const match = rows.find((row) => row.name === upper[2]);
     return { match, label: upper.join("."), matches: match ? [match] : [] };
   }
-  const rows = await showProjects(`%${upper[0]}%`, {});
+  const rows = await showProjects(`%${upper[0]}%`, {}, role);
   const exact = rows.filter((row) => row.name === upper[0]);
   const matches = exact.length > 0 ? exact : rows;
   return { match: matches.length === 1 ? matches[0] : undefined, label: upper[0], matches };
@@ -147,8 +148,9 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
     ]);
   }
 
+  const role = args.str("--role");
   const upper = parseProjectName(args.positionals[0]);
-  const { match, label, matches } = await findProject(upper);
+  const { match, label, matches } = await findProject(upper, role);
   if (!match) {
     if (matches.length > 1) {
       throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
@@ -165,6 +167,7 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
   const started = Date.now();
   const { rows } = await runQuery(`EXECUTE DBT PROJECT ${fqn} args='${literal}'`, {
     timeoutSeconds: args.int("--timeout"),
+    role,
   });
   return {
     project: fqn,
@@ -220,10 +223,15 @@ export const dbtCommand = defineCommand("dbt", {
           min: 1,
           max: 14400,
         },
+        "--role": {
+          type: "string",
+          placeholder: "<name>",
+          description: "run as another role granted to the user, when the default role cannot execute the project",
+        },
       },
       notes: [
         "Refused with WRITE_NOT_ALLOWED until the user grants dbt.execute (see `snowflake-axi allow --help`).",
-        "The connection's user needs a role with the privileges to execute the project.",
+        "The connection's user needs a role with the privileges to execute the project; pass it with --role.",
       ],
       examples: ['snowflake-axi dbt execute MY_PROJECT --args "build"'],
       run: execute,

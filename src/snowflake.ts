@@ -14,6 +14,8 @@ export interface QueryOptions {
   timeoutSeconds?: number;
   /** One-off warehouse switch; sessions otherwise run on the user's DEFAULT_WAREHOUSE. */
   warehouse?: string;
+  /** One-off primary-role switch; sessions otherwise run as the user's DEFAULT_ROLE. */
+  role?: string;
 }
 
 interface ColumnType {
@@ -70,7 +72,7 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
   const { base, headers } = requestContext();
   const body = JSON.stringify({
     statement: sqlText,
-    role: config.role,
+    role: options.role ?? config.role,
     warehouse: options.warehouse,
     database: config.database,
     schema: config.schema,
@@ -234,6 +236,12 @@ function translateError(status: number, message: string): AxiError {
         "Or give the user a durable default: ALTER USER <user> SET DEFAULT_NAMESPACE = '<db>.<schema>'",
       ],
     );
+  }
+  if (/role.*not granted to this user.*not permitted for the credentials/i.test(compact)) {
+    return new AxiError("Snowflake refused the requested role for this token", "SNOWFLAKE_ERROR", [
+      "The role must be granted to the service user: SHOW GRANTS TO USER <user>",
+      "A token minted with ROLE_RESTRICTION is pinned to that role; role switching needs a PAT minted without it",
+    ]);
   }
   if (/invalid identifier/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", ["Run `snowflake-axi schema <table>` to check the column names"]);

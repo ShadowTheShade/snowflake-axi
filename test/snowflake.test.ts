@@ -82,12 +82,19 @@ describe("runQuery over the SQL API", () => {
     expect("timeout" in body).toBe(false);
     expect("bindings" in body).toBe(false);
     expect("warehouse" in body).toBe(false);
+    expect(body.role).toBe("READER");
   });
 
   it("passes a one-off warehouse switch through to the request", async () => {
     fetchMock.mockResolvedValueOnce(okResult());
     await runQuery("SELECT 1", { warehouse: "BIG_WH" });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).warehouse).toBe("BIG_WH");
+  });
+
+  it("prefers a one-off role switch over the configured role", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1", { role: "OTHER_ROLE" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).role).toBe("OTHER_ROLE");
   });
 
   it("fetches only the partitions maxRows needs while reporting the full total", async () => {
@@ -170,6 +177,24 @@ describe("runQuery over the SQL API", () => {
   it("translates auth failures by status", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { message: "Invalid token" }));
     await expect(runQuery("SELECT 1")).rejects.toMatchObject({ code: "AUTH_ERROR" });
+  });
+
+  it("translates a role refused for the token with the ROLE_RESTRICTION hint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, {
+        code: "390189",
+        message:
+          "Role 'ANALYTICS_ROLE' specified in the connect string is not granted to this user, or is not permitted for the credentials being used. Contact your local system administrator, or attempt to login with another role, e.g. PUBLIC.",
+      }),
+    );
+    await expect(runQuery("SELECT 1", { role: "ANALYTICS_ROLE" })).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      message: "Snowflake refused the requested role for this token",
+      suggestions: [
+        "The role must be granted to the service user: SHOW GRANTS TO USER <user>",
+        "A token minted with ROLE_RESTRICTION is pinned to that role; role switching needs a PAT minted without it",
+      ],
+    });
   });
 
   it("translates timeouts with a --timeout hint", async () => {
