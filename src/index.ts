@@ -3,9 +3,11 @@ import { runAxiCli } from "axi-sdk-js";
 import type { CommandSpec } from "./command.js";
 import { allowCommand } from "./commands/allow.js";
 import { dbtCommand } from "./commands/dbt.js";
+import { findCommand } from "./commands/find.js";
 import { homeView } from "./commands/home.js";
 import { modelCommand } from "./commands/model.js";
 import { queryCommand } from "./commands/query.js";
+import { resultCommand } from "./commands/result.js";
 import { sampleCommand } from "./commands/sample.js";
 import { schemaCommand } from "./commands/schema.js";
 import { stageCommand } from "./commands/stage.js";
@@ -18,9 +20,11 @@ const DESCRIPTION = "Read-only Snowflake explorer for agents; TOON output, SELEC
 
 export const CORE_COMMANDS: Record<string, CommandSpec> = {
   tables: tablesCommand,
+  find: findCommand,
   schema: schemaCommand,
   sample: sampleCommand,
   query: queryCommand,
+  result: resultCommand,
   warehouses: warehousesCommand,
   model: modelCommand,
   dbt: dbtCommand,

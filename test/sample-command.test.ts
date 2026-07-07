@@ -18,8 +18,8 @@ describe("sample command", () => {
 
   it("keeps explicit qualification intact", async () => {
     runQuery.mockResolvedValueOnce({ rows: [{ A: "1" }], total: 1 });
-    await sampleCommand.run(["analytics_db.public.fct_orders", "--limit", "1"]);
-    expect(runQuery.mock.calls[0][0]).toBe("SELECT * FROM ANALYTICS_DB.PUBLIC.FCT_ORDERS LIMIT 1");
+    await sampleCommand.run(["scoops_db.public.fct_orders", "--limit", "1"]);
+    expect(runQuery.mock.calls[0][0]).toBe("SELECT * FROM SCOOPS_DB.PUBLIC.FCT_ORDERS LIMIT 1");
   });
 
   it("rejects invalid field names before querying", async () => {

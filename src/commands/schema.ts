@@ -39,7 +39,7 @@ export const schemaCommand = defineCommand("schema", {
     notes: [
       "Table names resolve as table, schema.table, or db.schema.table; unqualified parts use the session's default namespace.",
     ],
-    examples: ["snowflake-axi schema FCT_ORDERS", "snowflake-axi schema ANALYTICS_DB.PUBLIC.DIM_CUSTOMERS"],
+    examples: ["snowflake-axi schema FCT_ORDERS", "snowflake-axi schema SCOOPS_DB.PUBLIC.DIM_FLAVORS"],
     run,
   },
 });

@@ -12,9 +12,11 @@ Status: functional, not yet published to npm.
 snowflake-axi                 # home view: connection context + databases
 snowflake-axi tables          # tables in the default schema, largest first
 snowflake-axi tables MY_DB    # schema summary for a database
+snowflake-axi find flavor     # search tables/views by name across the account
 snowflake-axi schema MY_TABLE # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT COUNT(*) FROM MY_TABLE"
+snowflake-axi result 01b66701-0000-23c5-0000-45a100012345  # collect an earlier statement's output
 snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
@@ -96,9 +98,11 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 |---|---|
 | (no args) | Connection context, databases, next-step suggestions |
 | `tables [db[.schema]]` | Tables with row counts and sizes (INFORMATION_SCHEMA, no scan); db scope lists schemas, no scope and no default lists databases |
+| `find <pattern>` | Search tables and views by name across every database the roles can see |
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
 | `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout` |
+| `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |

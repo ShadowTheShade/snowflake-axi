@@ -202,8 +202,8 @@ export const tablesCommand = defineCommand("tables", {
     ],
     examples: [
       "snowflake-axi tables",
-      "snowflake-axi tables ANALYTICS_DB",
-      "snowflake-axi tables ANALYTICS_DB.PUBLIC --like fact",
+      "snowflake-axi tables SCOOPS_DB",
+      "snowflake-axi tables SCOOPS_DB.PUBLIC --like fact",
     ],
     run,
   },

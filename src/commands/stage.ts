@@ -101,7 +101,7 @@ export const stageCommand = defineCommand("stage", {
           max: 10000,
         },
       },
-      examples: ["snowflake-axi stage @ANALYTICS_DB.RAW.EVENTS_STAGE"],
+      examples: ["snowflake-axi stage @SCOOPS_DB.RAW.POS_EXPORTS_STAGE"],
       run: list,
     },
     read: {
@@ -116,7 +116,7 @@ export const stageCommand = defineCommand("stage", {
         },
         "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char record truncation` },
       },
-      examples: ["snowflake-axi stage read @ANALYTICS_DB.RAW.EVENTS_STAGE/2026/file.parquet --limit 3"],
+      examples: ["snowflake-axi stage read @SCOOPS_DB.RAW.POS_EXPORTS_STAGE/2026/file.parquet --limit 3"],
       run: read,
     },
   },

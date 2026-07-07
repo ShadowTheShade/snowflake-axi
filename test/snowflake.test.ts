@@ -13,7 +13,7 @@ vi.mock("../src/config.js", async (importOriginal) => ({
   }),
 }));
 
-import { runQuery } from "../src/snowflake.js";
+import { fetchStatementResult, runQuery } from "../src/snowflake.js";
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
@@ -217,5 +217,53 @@ describe("runQuery over the SQL API", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("emits a recovery handle to stderr once polling runs long", async () => {
+    vi.useFakeTimers();
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      fetchMock.mockImplementation(async () =>
+        jsonResponse(202, { statementHandle: "h9", statementStatusUrl: "/api/v2/statements/h9?requestId=r" }),
+      );
+      const promise = runQuery("SELECT SLOW()");
+      await vi.advanceTimersByTimeAsync(10_600);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(expect.stringContaining("snowflake-axi result h9"));
+      fetchMock.mockImplementation(async () => okResult());
+      await vi.advanceTimersByTimeAsync(600);
+      const { total } = await promise;
+      expect(total).toBe(2);
+      expect(stderr).toHaveBeenCalledOnce();
+    } finally {
+      stderr.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("fetchStatementResult", () => {
+  it("fetches a completed statement by handle without resubmitting", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    const result = await fetchStatementResult("h1", { maxRows: 1 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://MY-ORG-MY-ACCOUNT.snowflakecomputing.com/api/v2/statements/h1");
+    expect(init.method).toBeUndefined();
+    expect("rows" in result && result.rows).toEqual([{ A: "1", B: "x" }]);
+    expect("total" in result && result.total).toBe(2);
+  });
+
+  it("reports a still-executing statement as running", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(202, { statementStatusUrl: "/api/v2/statements/h1?requestId=r" }));
+    await expect(fetchStatementResult("h1")).resolves.toEqual({ running: true, handle: "h1" });
+  });
+
+  it("translates an expired handle with a rerun suggestion", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(422, { message: "Statement 01b66701 not found" }));
+    await expect(fetchStatementResult("01b66701")).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      suggestions: [expect.stringContaining("24 hours")],
+    });
   });
 });

@@ -23,6 +23,7 @@ Run commands directly - do NOT start with `--help` or the bare command; the exam
 snowflake-axi tables                        # default schema's tables, largest first, with row counts
 snowflake-axi tables MY_DB                  # schema summary for a database
 snowflake-axi tables MY_DB.MY_SCHEMA --like orders
+snowflake-axi find flavor                   # search tables/views by name, account-wide
 snowflake-axi schema MY_TABLE               # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT ..." --limit 50 # one read-only statement; total count always reported
@@ -44,6 +45,8 @@ snowflake-axi allow                         # write capabilities and their grant
 - `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
+- A query that runs long prints a statement handle to stderr;
+  `snowflake-axi result <handle>` collects its output later without re-running it.
 - Prefer `--fields`, `--like`, `--limit`, and piping through `grep`/`head` to keep output small.
 - Write commands are gated: on WRITE_NOT_ALLOWED, ask the user for permission in conversation.
   Only after they explicitly agree, run `snowflake-axi allow <capability> --agent`.

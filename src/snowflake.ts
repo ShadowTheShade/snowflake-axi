@@ -36,6 +36,26 @@ interface StatementResponse {
 const NUMERIC_TYPES = new Set(["fixed", "real"]);
 const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
 const POLL_MS = 500;
+const HANDLE_NOTE_MS = 10_000;
+
+/** A statement that is still executing; its result stays collectable for ~24h. */
+export interface RunningStatement {
+  running: true;
+  handle: string;
+}
+
+function requestContext(): { base: string; headers: Record<string, string> } {
+  const config = loadConfig();
+  return {
+    base: `https://${config.account.replace(/_/g, "-")}.snowflakecomputing.com`,
+    headers: {
+      authorization: `Bearer ${config.token}`,
+      "x-snowflake-authorization-token-type": "PROGRAMMATIC_ACCESS_TOKEN",
+      "content-type": "application/json",
+      "user-agent": "snowflake-axi",
+    },
+  };
+}
 
 /**
  * Executes one statement over the Snowflake SQL API: a stateless HTTPS POST
@@ -47,13 +67,7 @@ const POLL_MS = 500;
  */
 export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
-  const base = `https://${config.account.replace(/_/g, "-")}.snowflakecomputing.com`;
-  const headers: Record<string, string> = {
-    authorization: `Bearer ${config.token}`,
-    "x-snowflake-authorization-token-type": "PROGRAMMATIC_ACCESS_TOKEN",
-    "content-type": "application/json",
-    "user-agent": "snowflake-axi",
-  };
+  const { base, headers } = requestContext();
   const body = JSON.stringify({
     statement: sqlText,
     role: config.role,
@@ -69,11 +83,43 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
   if (!response.ok) {
     throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
   }
+  return collectResult(base, headers, payload, options.maxRows);
+}
 
+/**
+ * Fetches the result of a previously submitted statement by handle, without
+ * re-running it. Returns a running marker while the statement is still
+ * executing.
+ */
+export async function fetchStatementResult(
+  handle: string,
+  options: { maxRows?: number } = {},
+): Promise<QueryResult | RunningStatement> {
+  const { base, headers } = requestContext();
+  let response: Response;
+  try {
+    response = await fetch(`${base}/api/v2/statements/${handle}`, { headers });
+  } catch (err) {
+    throw translateError(0, err instanceof Error ? err.message : String(err));
+  }
+  if (response.status === 202) return { running: true, handle };
+  const payload = await parsePayload(response);
+  if (!response.ok) {
+    throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
+  }
+  return collectResult(base, headers, payload, options.maxRows);
+}
+
+async function collectResult(
+  base: string,
+  headers: Record<string, string>,
+  payload: StatementResponse,
+  maxRows: number | undefined,
+): Promise<QueryResult> {
   const meta = payload.resultSetMetaData;
   if (!meta) return { rows: [], total: 0, numericColumns: new Set() };
   const total = meta.numRows;
-  const wanted = options.maxRows === undefined ? total : Math.min(options.maxRows, total);
+  const wanted = maxRows === undefined ? total : Math.min(maxRows, total);
   const cells = [...(payload.data ?? [])];
   for (let partition = 1; cells.length < wanted && partition < meta.partitionInfo.length; partition++) {
     cells.push(...(await fetchPartition(base, headers, payload.statementHandle ?? "", partition)));
@@ -101,12 +147,22 @@ async function submit(base: string, headers: Record<string, string>, body: strin
   }
 }
 
-// 202 means the statement is still executing; poll until it settles.
+// 202 means the statement is still executing; poll until it settles. Once
+// polling runs long, the handle goes to stderr so a killed invocation (an
+// agent's shell timeout, Ctrl+C) does not orphan the warehouse work.
 async function awaitResult(base: string, headers: Record<string, string>, first: Response): Promise<Response> {
   let response = first;
+  const started = Date.now();
+  let noted = false;
   while (response.status === 202) {
-    const { statementStatusUrl } = await parsePayload(response);
+    const { statementStatusUrl, statementHandle } = await parsePayload(response);
     if (!statementStatusUrl) break;
+    if (!noted && statementHandle && Date.now() - started > HANDLE_NOTE_MS) {
+      noted = true;
+      process.stderr.write(
+        `still running; if this invocation dies, collect with: snowflake-axi result ${statementHandle}\n`,
+      );
+    }
     await new Promise((resolve) => setTimeout(resolve, POLL_MS));
     response = await fetch(`${base}${statementStatusUrl}`, { headers });
   }
@@ -181,6 +237,11 @@ function translateError(status: number, message: string): AxiError {
   }
   if (/invalid identifier/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", ["Run `snowflake-axi schema <table>` to check the column names"]);
+  }
+  if (/statement.*(not found|does not exist)/i.test(compact)) {
+    return new AxiError(compact, "SNOWFLAKE_ERROR", [
+      "Statement results are kept for about 24 hours and are only visible to the submitting user; rerun the original query if the handle expired",
+    ]);
   }
   if (/does not exist or not authorized/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", [

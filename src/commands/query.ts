@@ -1,10 +1,8 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { shapeRows } from "../format.js";
+import { CELL_LIMIT, presentRows } from "../present.js";
 import { runQuery } from "../snowflake.js";
 import { assertReadOnly } from "../validate.js";
-
-const CELL_LIMIT = 200;
 
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
@@ -18,35 +16,13 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const { sql } = assertReadOnly(rawSql);
 
   const started = Date.now();
-  const { rows, total, numericColumns } = await runQuery(sql, {
+  const result = await runQuery(sql, {
     maxRows: limit,
     timeoutSeconds: timeout,
     warehouse: args.str("--warehouse"),
   });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-
-  if (total === 0) {
-    return { count: "0 rows", elapsed };
-  }
-
-  const { rows: shaped, truncatedCells } = shapeRows(rows, {
-    maxCellChars: full ? null : CELL_LIMIT,
-    numericColumns,
-  });
-  const help: string[] = [];
-  if (rows.length < total) {
-    help.push(`Run with --limit ${Math.min(total, 1000)} to fetch more of the ${total} rows`);
-  }
-  if (truncatedCells > 0) {
-    help.push(`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`);
-  }
-  const count = rows.length < total ? `${rows.length} of ${total} total` : `${total} (complete)`;
-  return {
-    count,
-    rows: shaped,
-    elapsed,
-    ...(help.length > 0 ? { help } : {}),
-  };
+  return { ...presentRows(result, full), elapsed };
 }
 
 export const queryCommand = defineCommand("query", {
@@ -79,12 +55,13 @@ export const queryCommand = defineCommand("query", {
       },
     },
     notes: [
-      "Unqualified table names resolve against the configured default database.schema.",
+      "Unqualified table names resolve against the session's default namespace.",
       "Allowed statement heads: SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN.",
+      "Long statements print their handle to stderr; `snowflake-axi result <handle>` collects the output later.",
     ],
     examples: [
       'snowflake-axi query "SELECT COUNT(*) FROM FCT_ORDERS"',
-      'snowflake-axi query "SHOW SCHEMAS IN DATABASE ANALYTICS_DB"',
+      'snowflake-axi query "SHOW SCHEMAS IN DATABASE SCOOPS_DB"',
       "snowflake-axi query \"SELECT * FROM DIM_CUSTOMERS WHERE REGION = 'EMEA'\" --limit 100",
     ],
     run,

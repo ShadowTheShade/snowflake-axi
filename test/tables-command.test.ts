@@ -24,7 +24,7 @@ function stubSession(namespace: { DB: string | null; SC: string | null }, tables
     if (sql === "SHOW DATABASES") {
       return Promise.resolve({
         rows: [
-          { name: "ANALYTICS_DB", comment: "warehouse models" },
+          { name: "SCOOPS_DB", comment: "warehouse models" },
           { name: "RAW_DB", comment: "" },
         ],
         total: 2,
@@ -43,9 +43,9 @@ beforeEach(() => {
 
 describe("tables command", () => {
   it("lists default-namespace tables largest first, excluding views with a note", async () => {
-    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, BASE_ROWS);
+    stubSession({ DB: "SCOOPS_DB", SC: "PUBLIC" }, BASE_ROWS);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;
-    expect(output.scope).toBe("ANALYTICS_DB.PUBLIC");
+    expect(output.scope).toBe("SCOOPS_DB.PUBLIC");
     expect(output.count).toBe("2 tables, largest first (1 views excluded; use --views)");
     expect(output.tables).toEqual([
       { name: "EVENTS", rows: 48210332, size: "18.2GB" },
@@ -60,14 +60,14 @@ describe("tables command", () => {
     stubSession({ DB: null, SC: null }, null);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;
     expect(output.count).toBe("2 databases");
-    expect(output.databases).toEqual([{ name: "ANALYTICS_DB", comment: "warehouse models" }, { name: "RAW_DB" }]);
+    expect(output.databases).toEqual([{ name: "SCOOPS_DB", comment: "warehouse models" }, { name: "RAW_DB" }]);
     expect((output.help as string[])[0]).toContain("tables <db>");
   });
 
   it("falls back to the schema summary when the session has a database but no schema", async () => {
-    stubSession({ DB: "ANALYTICS_DB", SC: null }, []);
+    stubSession({ DB: "SCOOPS_DB", SC: null }, []);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;
-    expect(output.database).toBe("ANALYTICS_DB");
+    expect(output.database).toBe("SCOOPS_DB");
     expect(output.schemas).toEqual([{ name: "PUBLIC", tables: 47, size: "32.1GB" }]);
   });
 
@@ -80,7 +80,7 @@ describe("tables command", () => {
   });
 
   it("includes views with a kind column under --views", async () => {
-    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, BASE_ROWS);
+    stubSession({ DB: "SCOOPS_DB", SC: "PUBLIC" }, BASE_ROWS);
     const output = (await tablesCommand.run(["--views"])) as Record<string, unknown>;
     const tables = output.tables as Record<string, unknown>[];
     expect(tables).toHaveLength(3);
@@ -88,7 +88,7 @@ describe("tables command", () => {
   });
 
   it("wraps bare --like words as contains patterns", async () => {
-    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, [BASE_ROWS[1]]);
+    stubSession({ DB: "SCOOPS_DB", SC: "PUBLIC" }, [BASE_ROWS[1]]);
     await tablesCommand.run(["--like", "fact"]);
     const listing = runQuery.mock.calls.find(([sql]) => sql.includes("FROM INFORMATION_SCHEMA.TABLES"));
     expect(listing?.[1].binds).toEqual(["%fact%"]);
@@ -96,11 +96,11 @@ describe("tables command", () => {
 
   it("queries an explicit db.schema scope with binds and no probe", async () => {
     runQuery.mockResolvedValueOnce({ rows: BASE_ROWS, total: 3 });
-    const output = (await tablesCommand.run(["analytics_db.public"])) as Record<string, unknown>;
-    expect(output.scope).toBe("ANALYTICS_DB.PUBLIC");
+    const output = (await tablesCommand.run(["scoops_db.public"])) as Record<string, unknown>;
+    expect(output.scope).toBe("SCOOPS_DB.PUBLIC");
     expect(runQuery).toHaveBeenCalledTimes(1);
     const [sql, options] = runQuery.mock.calls[0];
-    expect(sql).toContain("ANALYTICS_DB.INFORMATION_SCHEMA.TABLES");
+    expect(sql).toContain("SCOOPS_DB.INFORMATION_SCHEMA.TABLES");
     expect(sql).toContain("TABLE_SCHEMA = ?");
     expect(options.binds).toEqual(["PUBLIC"]);
   });
@@ -110,14 +110,14 @@ describe("tables command", () => {
       rows: [{ NAME: "PUBLIC", TABLES: "47", BYTES: "34482929664" }],
       total: 1,
     });
-    const output = (await tablesCommand.run(["analytics_db"])) as Record<string, unknown>;
-    expect(output.database).toBe("ANALYTICS_DB");
+    const output = (await tablesCommand.run(["scoops_db"])) as Record<string, unknown>;
+    expect(output.database).toBe("SCOOPS_DB");
     expect(output.schemas).toEqual([{ name: "PUBLIC", tables: 47, size: "32.1GB" }]);
   });
 
   it("applies --like to schema names at database scope", async () => {
     runQuery.mockResolvedValueOnce({ rows: [{ NAME: "RAW", TABLES: "3", BYTES: "1024" }], total: 1 });
-    const output = (await tablesCommand.run(["analytics_db", "--like", "raw"])) as Record<string, unknown>;
+    const output = (await tablesCommand.run(["scoops_db", "--like", "raw"])) as Record<string, unknown>;
     expect(runQuery.mock.calls[0][0]).toContain("TABLE_SCHEMA ILIKE ?");
     expect(runQuery.mock.calls[0][1].binds).toEqual(["%raw%"]);
     expect(output.schemas).toEqual([{ name: "RAW", tables: 3, size: "1KB" }]);
@@ -125,7 +125,7 @@ describe("tables command", () => {
 
   it("reports empty schema matches definitively at database scope", async () => {
     runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
-    const output = (await tablesCommand.run(["analytics_db", "--like", "nope"])) as Record<string, unknown>;
+    const output = (await tablesCommand.run(["scoops_db", "--like", "nope"])) as Record<string, unknown>;
     expect(output.count).toBe("0 schemas with tables matching '%nope%'");
   });
 
@@ -137,13 +137,13 @@ describe("tables command", () => {
       ],
       total: 2,
     });
-    const output = (await tablesCommand.run(["analytics_db", "--limit", "1"])) as Record<string, unknown>;
+    const output = (await tablesCommand.run(["scoops_db", "--limit", "1"])) as Record<string, unknown>;
     expect(output.schemas).toHaveLength(1);
     expect((output.help as string[])[0]).toContain("--limit 2");
   });
 
   it("rejects --views at database scope before querying", async () => {
-    await expect(tablesCommand.run(["analytics_db", "--views"])).rejects.toMatchObject({
+    await expect(tablesCommand.run(["scoops_db", "--views"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
     });
     expect(runQuery).not.toHaveBeenCalled();
@@ -155,9 +155,9 @@ describe("tables command", () => {
   });
 
   it("reports empty scopes definitively", async () => {
-    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, []);
+    stubSession({ DB: "SCOOPS_DB", SC: "PUBLIC" }, []);
     const output = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
-    expect(output.count).toBe("0 tables matching '%nope%' in ANALYTICS_DB.PUBLIC");
+    expect(output.count).toBe("0 tables matching '%nope%' in SCOOPS_DB.PUBLIC");
   });
 
   it("rejects malformed scopes", async () => {

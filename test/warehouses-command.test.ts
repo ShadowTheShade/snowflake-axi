@@ -35,7 +35,7 @@ describe("warehouses command", () => {
   });
 
   it("blames the role only when the metering query actually fails", async () => {
-    loadConfig.mockReturnValue({ database: "ANALYTICS_DB", modelDirs: [] });
+    loadConfig.mockReturnValue({ database: "SCOOPS_DB", modelDirs: [] });
     runQuery.mockImplementation(async (sql: string) => {
       if (sql.includes("SHOW WAREHOUSES")) {
         return { rows: [{ name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "" }], total: 1 };
@@ -47,7 +47,7 @@ describe("warehouses command", () => {
   });
 
   it("never fabricates zeros when metering comes back empty (ambiguous with missing MONITOR)", async () => {
-    loadConfig.mockReturnValue({ database: "ANALYTICS_DB", modelDirs: [] });
+    loadConfig.mockReturnValue({ database: "SCOOPS_DB", modelDirs: [] });
     runQuery.mockImplementation(async (sql: string) =>
       sql.includes("SHOW WAREHOUSES")
         ? { rows: [{ name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "" }], total: 1 }
@@ -59,7 +59,7 @@ describe("warehouses command", () => {
   });
 
   it("shows trustworthy zeros for idle warehouses once metering rows are visible", async () => {
-    loadConfig.mockReturnValue({ database: "ANALYTICS_DB", modelDirs: [] });
+    loadConfig.mockReturnValue({ database: "SCOOPS_DB", modelDirs: [] });
     runQuery.mockImplementation(async (sql: string) =>
       sql.includes("SHOW WAREHOUSES")
         ? {
