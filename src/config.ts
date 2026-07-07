@@ -11,7 +11,6 @@ export interface Config {
   user: string;
   token: string;
   role?: string;
-  warehouse?: string;
   database?: string;
   schema?: string;
   modelDirs: string[];
@@ -92,7 +91,6 @@ function snowCliConnection(): Record<string, string> {
     SNOWFLAKE_USER: str("user"),
     SNOWFLAKE_TOKEN: token ?? str("password"),
     SNOWFLAKE_ROLE: str("role"),
-    SNOWFLAKE_WAREHOUSE: str("warehouse"),
     SNOWFLAKE_DATABASE: str("database"),
     SNOWFLAKE_SCHEMA: str("schema"),
   };
@@ -138,7 +136,6 @@ export function loadConfig(): Config {
     user,
     token,
     role: get("SNOWFLAKE_ROLE"),
-    warehouse: get("SNOWFLAKE_WAREHOUSE"),
     database: get("SNOWFLAKE_DATABASE"),
     schema: get("SNOWFLAKE_SCHEMA"),
     modelDirs: (get("SNOWFLAKE_AXI_MODEL_DIRS") ?? "").split(":").filter(Boolean).map(expandHome),

@@ -7,7 +7,6 @@ vi.mock("../src/config.js", async (importOriginal) => ({
     user: "SVC",
     token: "the-pat",
     role: "READER",
-    warehouse: "WH",
     database: "DB",
     schema: "PUBLIC",
     modelDirs: [],
@@ -56,7 +55,7 @@ describe("runQuery over the SQL API", () => {
     expect(init.headers.authorization).toBe("Bearer the-pat");
     expect(init.headers["x-snowflake-authorization-token-type"]).toBe("PROGRAMMATIC_ACCESS_TOKEN");
     const body = JSON.parse(init.body);
-    expect(body).toMatchObject({ statement: "SELECT 1", role: "READER", warehouse: "WH", database: "DB" });
+    expect(body).toMatchObject({ statement: "SELECT 1", role: "READER", database: "DB" });
     expect(rows).toEqual([
       { A: "1", B: "x" },
       { A: "2", B: null },
@@ -82,6 +81,13 @@ describe("runQuery over the SQL API", () => {
     const body = JSON.parse(fetchMock.mock.calls[0][1].body);
     expect("timeout" in body).toBe(false);
     expect("bindings" in body).toBe(false);
+    expect("warehouse" in body).toBe(false);
+  });
+
+  it("passes a one-off warehouse switch through to the request", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1", { warehouse: "BIG_WH" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).warehouse).toBe("BIG_WH");
   });
 
   it("fetches only the partitions maxRows needs while reporting the full total", async () => {

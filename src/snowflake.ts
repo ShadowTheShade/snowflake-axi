@@ -12,6 +12,8 @@ export interface QueryOptions {
   binds?: (string | number)[];
   maxRows?: number;
   timeoutSeconds?: number;
+  /** One-off warehouse switch; sessions otherwise run on the user's DEFAULT_WAREHOUSE. */
+  warehouse?: string;
 }
 
 interface ColumnType {
@@ -55,7 +57,7 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
   const body = JSON.stringify({
     statement: sqlText,
     role: config.role,
-    warehouse: config.warehouse,
+    warehouse: options.warehouse,
     database: config.database,
     schema: config.schema,
     timeout: options.timeoutSeconds,

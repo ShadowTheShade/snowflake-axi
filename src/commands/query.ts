@@ -18,7 +18,11 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const { sql } = assertReadOnly(rawSql);
 
   const started = Date.now();
-  const { rows, total, numericColumns } = await runQuery(sql, { maxRows: limit, timeoutSeconds: timeout });
+  const { rows, total, numericColumns } = await runQuery(sql, {
+    maxRows: limit,
+    timeoutSeconds: timeout,
+    warehouse: args.str("--warehouse"),
+  });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
 
   if (total === 0) {
@@ -67,6 +71,11 @@ export const queryCommand = defineCommand("query", {
         default: 60,
         min: 1,
         max: 3600,
+      },
+      "--warehouse": {
+        type: "string",
+        placeholder: "<name>",
+        description: "run this statement on a specific warehouse instead of the user's default",
       },
     },
     notes: [

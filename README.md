@@ -51,12 +51,13 @@ Optional overrides for setups that want them pinned client-side:
 
 ```
 SNOWFLAKE_ROLE=<primary role per request>
-SNOWFLAKE_WAREHOUSE=<warehouse>
 SNOWFLAKE_DATABASE=<default database>
 SNOWFLAKE_SCHEMA=<default schema>
 SNOWFLAKE_AXI_MODEL_DIRS=<colon-separated dbt model dirs, for the model command>
 SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT=<named file format, for the stage command>
 ```
+
+The warehouse is never configured: statements run on the user's `DEFAULT_WAREHOUSE`, `query --warehouse <name>` switches one statement, and dbt executions use the warehouse pinned in the project's own profiles.
 
 PAT auth requires a network policy attached to the Snowflake user; without one authentication fails with a network-policy error.
 
