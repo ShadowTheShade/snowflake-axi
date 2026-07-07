@@ -98,8 +98,12 @@ export default function myPlugin({ sql, config, AxiError, helpers }) {
 
 ```sh
 npm install
-npm run build   # tsc -> dist/
-npm test        # vitest
+npm run build            # tsc -> dist/
+npm test                 # unit tests: validator, flags, dates, formatting, command logic (mocked SQL)
+npm run test:integration # end-to-end: runs the built CLI as a subprocess against a real account
 ```
+
+The integration suite works against **any Snowflake account**: it touches only universal objects (`GENERATOR` table functions, the shared `SNOWFLAKE` database, `INFORMATION_SCHEMA`, `SHOW`), needs no fixtures or write access, and skips the live tests automatically when no credentials are configured.
+It covers what unit tests cannot: real SQL compilation, driver row shapes, result streaming and total counts, error translation, and exit codes.
 
 The command dispatch, TOON serialization, structured errors, and self-update come from [axi-sdk-js](https://www.npmjs.com/package/axi-sdk-js); this repo contains only Snowflake logic.
