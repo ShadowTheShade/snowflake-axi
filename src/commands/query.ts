@@ -77,7 +77,7 @@ export const queryCommand = defineCommand("query", {
     examples: [
       'snowflake-axi query "SELECT COUNT(*) FROM FCT_ORDERS"',
       'snowflake-axi query "SHOW SCHEMAS IN DATABASE ANALYTICS_DB"',
-      'snowflake-axi query "SELECT * FROM DIM_CUSTOMERS WHERE REGION = \'EMEA\'" --limit 100',
+      "snowflake-axi query \"SELECT * FROM DIM_CUSTOMERS WHERE REGION = 'EMEA'\" --limit 100",
     ],
     run,
   },

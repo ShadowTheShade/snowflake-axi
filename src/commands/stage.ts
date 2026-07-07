@@ -92,7 +92,14 @@ export const stageCommand = defineCommand("stage", {
       description: "List files under a stage path",
       positionals: { usage: "@db.schema.stage[/prefix]", min: 1, max: 1 },
       flags: {
-        "--limit": { type: "int", placeholder: "<n>", description: "max files shown", default: 100, min: 1, max: 10000 },
+        "--limit": {
+          type: "int",
+          placeholder: "<n>",
+          description: "max files shown",
+          default: 100,
+          min: 1,
+          max: 10000,
+        },
       },
       examples: ["snowflake-axi stage @ANALYTICS_DB.RAW.EVENTS_STAGE"],
       run: list,

@@ -120,7 +120,8 @@ export const tablesCommand = defineCommand("tables", {
       "--like": {
         type: "string",
         placeholder: "<pattern>",
-        description: "filter tables (schema scope) or schemas (db scope), case-insensitive; bare words match as contains",
+        description:
+          "filter tables (schema scope) or schemas (db scope), case-insensitive; bare words match as contains",
       },
       "--views": { type: "boolean", description: "include views, adds a kind column (schema scope only)" },
       "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
