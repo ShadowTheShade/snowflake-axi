@@ -59,9 +59,13 @@ function documentedInvocations(doc: string): string[][] {
   return invocations;
 }
 
-// Credential-free environment: config file and plugins resolve to nowhere, and
-// any SNOWFLAKE_* variables from the host shell are blanked out.
-const offlineEnv: Record<string, string> = { XDG_CONFIG_HOME: "/nonexistent-snowflake-axi-docs" };
+// Credential-free environment: config file, plugins, and snow CLI connections
+// resolve to nowhere, and any SNOWFLAKE_* variables from the host shell are
+// blanked out.
+const offlineEnv: Record<string, string> = {
+  XDG_CONFIG_HOME: "/nonexistent-snowflake-axi-docs",
+  SNOWFLAKE_HOME: "/nonexistent-snowflake-axi-docs",
+};
 for (const key of Object.keys(process.env)) {
   if (key.startsWith("SNOWFLAKE_")) offlineEnv[key] = "";
 }

@@ -2,6 +2,7 @@ import { AxiError } from "axi-sdk-js";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse as parseToml } from "smol-toml";
 
 export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
@@ -48,16 +49,70 @@ function expandHome(path: string): string {
   return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 }
 
+function snowflakeHome(): string {
+  return process.env.SNOWFLAKE_HOME || join(homedir(), ".snowflake");
+}
+
+function readToml(path: string): Record<string, unknown> | undefined {
+  try {
+    return parseToml(readFileSync(path, "utf8"));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Credentials shared with the official snow CLI: connections from
+ * ~/.snowflake/connections.toml (or the [connections] table of config.toml),
+ * selected the way snow selects them. Only PAT-style connections (a token
+ * with authenticator PROGRAMMATIC_ACCESS_TOKEN, or a password) are usable;
+ * browser/SSO/key-pair connections yield nothing here.
+ */
+function snowCliConnection(): Record<string, string> {
+  const home = snowflakeHome();
+  const config = readToml(join(home, "config.toml"));
+  const standalone = readToml(join(home, "connections.toml"));
+  const connections =
+    standalone && Object.keys(standalone).length > 0
+      ? standalone
+      : ((config?.connections ?? {}) as Record<string, unknown>);
+
+  const name =
+    process.env.SNOWFLAKE_DEFAULT_CONNECTION_NAME ||
+    (typeof config?.default_connection_name === "string" ? config.default_connection_name : "default");
+  const section = connections[name];
+  if (typeof section !== "object" || section === null) return {};
+
+  const connection = section as Record<string, unknown>;
+  const str = (key: string) => (typeof connection[key] === "string" ? (connection[key] as string) : undefined);
+  const authenticator = str("authenticator")?.toUpperCase();
+  const token = authenticator === "PROGRAMMATIC_ACCESS_TOKEN" ? str("token") : undefined;
+  const values: Record<string, string | undefined> = {
+    SNOWFLAKE_ACCOUNT: str("account"),
+    SNOWFLAKE_USER: str("user"),
+    SNOWFLAKE_TOKEN: token ?? str("password"),
+    SNOWFLAKE_ROLE: str("role"),
+    SNOWFLAKE_WAREHOUSE: str("warehouse"),
+    SNOWFLAKE_DATABASE: str("database"),
+    SNOWFLAKE_SCHEMA: str("schema"),
+  };
+  return Object.fromEntries(
+    Object.entries(values).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+}
+
 let cached: Config | undefined;
 
 export function loadConfig(): Config {
   if (cached) return cached;
   const file = parseEnvFile(envFilePath());
-  const get = (key: string) => process.env[key] ?? file[key];
+  const toml = snowCliConnection();
+  const get = (key: string) => process.env[key] || file[key] || toml[key] || undefined;
   const missing = ["SNOWFLAKE_ACCOUNT", "SNOWFLAKE_USER", "SNOWFLAKE_TOKEN"].filter((k) => !get(k));
   if (missing.length > 0) {
     throw new AxiError(`Missing Snowflake credentials: ${missing.join(", ")}`, "CONFIG_ERROR", [
       `Create ${envFilePath()} with SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_TOKEN (PAT)`,
+      "Or add a PAT connection to ~/.snowflake/connections.toml (shared with the snow CLI)",
       "Optional keys: SNOWFLAKE_ROLE, SNOWFLAKE_WAREHOUSE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA",
     ]);
   }

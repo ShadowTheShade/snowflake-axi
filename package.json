@@ -22,6 +22,7 @@
   },
   "dependencies": {
     "axi-sdk-js": "^0.1.8",
+    "smol-toml": "^1.7.0",
     "snowflake-sdk": "^3.0.0"
   },
   "devDependencies": {

@@ -40,6 +40,12 @@ SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT=<named file format, for the stage command>
 
 PAT auth requires a network policy attached to the Snowflake user; without one authentication fails with a network-policy error.
 
+When a value is not provided by the process env or the env file, snowflake-axi falls back to the official snow CLI's connection configuration: `~/.snowflake/connections.toml`, or the `[connections]` table in `~/.snowflake/config.toml`.
+The connection is selected the way snow selects it (`SNOWFLAKE_DEFAULT_CONNECTION_NAME`, then `default_connection_name` in config.toml, then `default`), and `SNOWFLAKE_HOME` relocates the directory.
+Only PAT-style connections are usable: a `token` with `authenticator = "PROGRAMMATIC_ACCESS_TOKEN"`, or a `password`.
+Browser, SSO, OAuth, and key-pair connections are ignored.
+If you already use the snow CLI, snowflake-axi needs no configuration of its own.
+
 ## Read-only by construction
 
 Two independent layers:

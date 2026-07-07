@@ -1,5 +1,5 @@
 import { AxiError } from "axi-sdk-js";
-import snowflake, { type Connection } from "snowflake-sdk";
+import type { Connection } from "snowflake-sdk";
 import { loadConfig } from "./config.js";
 
 export interface QueryResult {
@@ -15,8 +15,11 @@ export interface QueryOptions {
 
 let connecting: Promise<Connection> | undefined;
 
+// snowflake-sdk costs >1s to import, so it loads only once a connection is
+// actually needed; validation, help, and config errors stay near-instant.
 async function connect(): Promise<Connection> {
   const config = loadConfig();
+  const { default: snowflake } = await import("snowflake-sdk");
   snowflake.configure({ logLevel: "OFF" });
   const connection = snowflake.createConnection({
     account: config.account,
