@@ -2,6 +2,7 @@
 
 Read-only Snowflake explorer for coding agents, built on the [AXI principles](https://axi.md/): TOON output, minimal schemas, pre-computed aggregates, definitive empty states, fail-loud flags.
 It replaces heavier MCP paths for read and discovery work: zero standing token cost (invoked via Bash on demand) and ~40% leaner output than JSON.
+Statements run over the Snowflake SQL API with the PAT as a bearer token - one stateless HTTPS request, no driver, no login handshake - so a full query round trip completes in about half a second.
 
 Status: functional, not yet published to npm.
 
@@ -43,8 +44,8 @@ PAT auth requires a network policy attached to the Snowflake user; without one a
 
 When a value is not provided by the process env or the env file, snowflake-axi falls back to the official snow CLI's connection configuration: `~/.snowflake/connections.toml`, or the `[connections]` table in `~/.snowflake/config.toml`.
 The connection is selected the way snow selects it (`SNOWFLAKE_DEFAULT_CONNECTION_NAME`, then `default_connection_name` in config.toml, then `default`), and `SNOWFLAKE_HOME` relocates the directory.
-Only PAT-style connections are usable: a `token` with `authenticator = "PROGRAMMATIC_ACCESS_TOKEN"`, or a `password`.
-Browser, SSO, OAuth, and key-pair connections are ignored.
+Only PAT connections are usable: a `token` with `authenticator = "PROGRAMMATIC_ACCESS_TOKEN"`, or a `password` field that holds a PAT.
+Real passwords do not work (statements run over the SQL API, which takes the PAT as a bearer token); browser, SSO, OAuth, and key-pair connections are ignored.
 If you already use the snow CLI, snowflake-axi needs no configuration of its own.
 
 ## Read-only by construction
@@ -113,7 +114,7 @@ npm run test:integration # end-to-end: runs the built CLI as a subprocess agains
 ```
 
 The integration suite works against **any Snowflake account**: it touches only universal objects (`GENERATOR` table functions, the shared `SNOWFLAKE` database, `INFORMATION_SCHEMA`, `SHOW`), needs no fixtures or write access, and skips the live tests automatically when no credentials are configured.
-It covers what unit tests cannot: real SQL compilation, driver row shapes, result streaming and total counts, error translation, and exit codes.
+It covers what unit tests cannot: real SQL compilation, SQL API response shapes, partial fetches and total counts, error translation, and exit codes.
 
 CI (`.github/workflows/ci.yml`) runs the build, the unit suite, and the credential-free half of the integration suite on Node 20 and 24.
 

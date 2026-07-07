@@ -1,5 +1,5 @@
+import { randomUUID } from "node:crypto";
 import { AxiError } from "axi-sdk-js";
-import type { Connection } from "snowflake-sdk";
 import { loadConfig } from "./config.js";
 
 export interface QueryResult {
@@ -11,52 +11,140 @@ export interface QueryResult {
 export interface QueryOptions {
   binds?: (string | number)[];
   maxRows?: number;
+  timeoutSeconds?: number;
 }
 
-let connecting: Promise<Connection> | undefined;
+interface ColumnType {
+  name: string;
+  type: string;
+}
 
-// snowflake-sdk costs >1s to import, so it loads only once a connection is
-// actually needed; validation, help, and config errors stay near-instant.
-async function connect(): Promise<Connection> {
+interface StatementResponse {
+  message?: string;
+  statementHandle?: string;
+  statementStatusUrl?: string;
+  resultSetMetaData?: {
+    numRows: number;
+    partitionInfo: { rowCount: number }[];
+    rowType: ColumnType[];
+  };
+  data?: (string | null)[][];
+}
+
+const NUMERIC_TYPES = new Set(["fixed", "real"]);
+const RETRYABLE_STATUS = new Set([429, 502, 503, 504]);
+const POLL_MS = 500;
+
+/**
+ * Executes one statement over the Snowflake SQL API: a stateless HTTPS POST
+ * authenticated by the PAT as a bearer token, so there is no login handshake
+ * or session to establish. With maxRows set, only the result partitions
+ * needed to cover it are fetched while the total row count comes from the
+ * result metadata, so callers can report definitive totals without fetching
+ * everything.
+ */
+export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
-  const { default: snowflake } = await import("snowflake-sdk");
-  snowflake.configure({ logLevel: "OFF" });
-  const connection = snowflake.createConnection({
-    account: config.account,
-    username: config.user,
-    password: config.token,
+  const base = `https://${config.account.replace(/_/g, "-")}.snowflakecomputing.com`;
+  const headers: Record<string, string> = {
+    authorization: `Bearer ${config.token}`,
+    "x-snowflake-authorization-token-type": "PROGRAMMATIC_ACCESS_TOKEN",
+    "content-type": "application/json",
+    "user-agent": "snowflake-axi",
+  };
+  const body = JSON.stringify({
+    statement: sqlText,
     role: config.role,
     warehouse: config.warehouse,
     database: config.database,
     schema: config.schema,
-    application: "snowflake_axi",
-    fetchAsString: ["Number", "Date"],
+    timeout: options.timeoutSeconds,
+    bindings: toBindings(options.binds),
   });
-  await new Promise<void>((resolve, reject) => {
-    connection.connect((err) => (err ? reject(translateError(err)) : resolve()));
-  });
-  return connection;
-}
 
-export function getConnection(): Promise<Connection> {
-  connecting ??= connect();
-  return connecting;
-}
-
-export async function closeConnection(): Promise<void> {
-  if (!connecting) return;
-  try {
-    const connection = await connecting;
-    await new Promise<void>((resolve) => connection.destroy(() => resolve()));
-  } catch {
-    // Connection never established; nothing to clean up.
+  const response = await awaitResult(base, headers, await submit(base, headers, body));
+  const payload = await parsePayload(response);
+  if (!response.ok) {
+    throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
   }
-  connecting = undefined;
+
+  const meta = payload.resultSetMetaData;
+  if (!meta) return { rows: [], total: 0, numericColumns: new Set() };
+  const total = meta.numRows;
+  const wanted = options.maxRows === undefined ? total : Math.min(options.maxRows, total);
+  const cells = [...(payload.data ?? [])];
+  for (let partition = 1; cells.length < wanted && partition < meta.partitionInfo.length; partition++) {
+    cells.push(...(await fetchPartition(base, headers, payload.statementHandle ?? "", partition)));
+  }
+  return {
+    rows: cells.slice(0, wanted).map((values) => decodeRow(values, meta.rowType)),
+    total,
+    numericColumns: new Set(meta.rowType.filter((c) => NUMERIC_TYPES.has(c.type)).map((c) => c.name)),
+  };
 }
 
-function translateError(err: { message?: string; code?: string | number }): AxiError {
-  const message = err.message ?? String(err);
-  if (message.includes("390432") || /network policy/i.test(message)) {
+// requestId makes the one retry after a transient failure idempotent.
+async function submit(base: string, headers: Record<string, string>, body: string): Promise<Response> {
+  const url = `${base}/api/v2/statements?requestId=${randomUUID()}`;
+  try {
+    const response = await fetch(url, { method: "POST", headers, body });
+    if (!RETRYABLE_STATUS.has(response.status)) return response;
+  } catch {
+    // Network failure; fall through to the single retry.
+  }
+  try {
+    return await fetch(`${url}&retry=true`, { method: "POST", headers, body });
+  } catch (err) {
+    throw translateError(0, err instanceof Error ? err.message : String(err));
+  }
+}
+
+// 202 means the statement is still executing; poll until it settles.
+async function awaitResult(base: string, headers: Record<string, string>, first: Response): Promise<Response> {
+  let response = first;
+  while (response.status === 202) {
+    const { statementStatusUrl } = await parsePayload(response);
+    if (!statementStatusUrl) break;
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+    response = await fetch(`${base}${statementStatusUrl}`, { headers });
+  }
+  return response;
+}
+
+async function fetchPartition(
+  base: string,
+  headers: Record<string, string>,
+  handle: string,
+  partition: number,
+): Promise<(string | null)[][]> {
+  const response = await fetch(`${base}/api/v2/statements/${handle}?partition=${partition}`, { headers });
+  const payload = await parsePayload(response);
+  if (!response.ok) {
+    throw translateError(response.status, payload.message ?? `result partition fetch failed (HTTP ${response.status})`);
+  }
+  return payload.data ?? [];
+}
+
+async function parsePayload(response: Response): Promise<StatementResponse> {
+  try {
+    return (await response.json()) as StatementResponse;
+  } catch {
+    return {};
+  }
+}
+
+function toBindings(binds?: (string | number)[]): Record<string, { type: string; value: string }> | undefined {
+  if (!binds || binds.length === 0) return undefined;
+  return Object.fromEntries(
+    binds.map((value, i) => [
+      String(i + 1),
+      { type: typeof value === "number" ? "FIXED" : "TEXT", value: String(value) },
+    ]),
+  );
+}
+
+function translateError(status: number, message: string): AxiError {
+  if (/network policy/i.test(message)) {
     return new AxiError("Snowflake rejected the token: user has no network policy for PAT auth", "AUTH_ERROR", [
       "Attach a network policy covering this machine's egress IP to the service user",
     ]);
@@ -69,13 +157,14 @@ function translateError(err: { message?: string; code?: string | number }): AxiE
       [`Have an admin add ${blockedIp} to the network policy attached to the service user`],
     );
   }
-  if (/incorrect username or password|authentication/i.test(message)) {
+  if (status === 401 || status === 403 || /incorrect username or password|authentication/i.test(message)) {
     return new AxiError("Snowflake authentication failed", "AUTH_ERROR", [
       "Check SNOWFLAKE_USER and SNOWFLAKE_TOKEN (PAT) in the env file, and that the PAT has not expired",
+      "PAT auth also fails when this machine's egress IP is outside the user's network policy",
     ]);
   }
   const compact = message.replace(/\s+/g, " ").trim();
-  if (/statement or warehouse timeout/i.test(compact)) {
+  if (status === 408 || /statement or warehouse timeout/i.test(compact)) {
     return new AxiError(compact, "TIMEOUT", ["Rerun with a higher --timeout <seconds> or narrow the query"]);
   }
   if (/invalid identifier/i.test(compact)) {
@@ -86,42 +175,75 @@ function translateError(err: { message?: string; code?: string | number }): AxiE
       "Run `snowflake-axi tables --like <name>` to find the right table",
     ]);
   }
+  if (status === 0) {
+    return new AxiError(`Could not reach Snowflake: ${compact}`, "CONNECTION_ERROR", [
+      "Check the network connection and that SNOWFLAKE_ACCOUNT is the right account identifier",
+    ]);
+  }
   return new AxiError(compact, "SNOWFLAKE_ERROR");
 }
 
-/**
- * Executes one statement. With maxRows set, streams only the first maxRows
- * rows off the result while total row count comes from the statement
- * metadata, so callers can report definitive totals without fetching
- * everything.
- */
-export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
-  const connection = await getConnection();
-  return new Promise<QueryResult>((resolve, reject) => {
-    connection.execute({
-      sqlText,
-      binds: options.binds,
-      streamResult: true,
-      complete: (err, statement) => {
-        if (err) {
-          reject(translateError(err));
-          return;
-        }
-        const total = statement.getNumRows();
-        const numericColumns = new Set(
-          (statement.getColumns() ?? []).filter((column) => column.isNumber()).map((column) => column.getName()),
-        );
-        const wanted = options.maxRows === undefined ? total : Math.min(options.maxRows, total);
-        const rows: Record<string, unknown>[] = [];
-        if (wanted === 0) {
-          resolve({ rows, total, numericColumns });
-          return;
-        }
-        const stream = statement.streamRows({ start: 0, end: wanted - 1 });
-        stream.on("data", (row: Record<string, unknown>) => rows.push(row));
-        stream.on("error", (streamErr: Error) => reject(translateError(streamErr)));
-        stream.on("end", () => resolve({ rows, total, numericColumns }));
-      },
-    });
+// jsonv2 wire encodings: dates are epoch days, times are seconds since
+// midnight, timestamps are epoch seconds with nanos, and timestamp_tz
+// appends the offset in minutes biased by +1440.
+function decodeRow(values: (string | null)[], columns: ColumnType[]): Record<string, unknown> {
+  const row: Record<string, unknown> = {};
+  columns.forEach((column, i) => {
+    row[column.name] = decodeValue(values[i], column.type);
   });
+  return row;
+}
+
+function decodeValue(value: string | null | undefined, type: string): unknown {
+  if (value === null || value === undefined) return null;
+  switch (type) {
+    case "date":
+      return utcDate(Number(value) * 86_400_000);
+    case "time": {
+      const { ms, fraction } = splitEpoch(value);
+      return clock(ms) + fraction;
+    }
+    case "timestamp_ntz": {
+      const { ms, fraction } = splitEpoch(value);
+      return stamp(ms) + fraction;
+    }
+    case "timestamp_ltz": {
+      const { ms, fraction } = splitEpoch(value);
+      return `${stamp(ms)}${fraction}Z`;
+    }
+    case "timestamp_tz": {
+      const [epoch, biasedOffset] = value.split(" ");
+      const offsetMinutes = Number(biasedOffset) - 1440;
+      const { ms, fraction } = splitEpoch(epoch);
+      const sign = offsetMinutes < 0 ? "-" : "+";
+      const abs = Math.abs(offsetMinutes);
+      return `${stamp(ms + offsetMinutes * 60_000)}${fraction}${sign}${pad(Math.floor(abs / 60))}:${pad(abs % 60)}`;
+    }
+    default:
+      return value;
+  }
+}
+
+function splitEpoch(value: string): { ms: number; fraction: string } {
+  const [seconds, nanos = ""] = value.split(".");
+  const trimmed = nanos.replace(/0+$/, "");
+  return { ms: Number(seconds) * 1000, fraction: trimmed ? `.${trimmed}` : "" };
+}
+
+function pad(n: number, width = 2): string {
+  return String(n).padStart(width, "0");
+}
+
+function utcDate(ms: number): string {
+  const d = new Date(ms);
+  return `${pad(d.getUTCFullYear(), 4)}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+function stamp(ms: number): string {
+  const d = new Date(ms);
+  return `${utcDate(ms)} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+}
+
+function clock(ms: number): string {
+  return `${pad(Math.floor(ms / 3_600_000))}:${pad(Math.floor(ms / 60_000) % 60)}:${pad(Math.floor(ms / 1000) % 60)}`;
 }

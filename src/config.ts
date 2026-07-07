@@ -64,9 +64,9 @@ function readToml(path: string): Record<string, unknown> | undefined {
 /**
  * Credentials shared with the official snow CLI: connections from
  * ~/.snowflake/connections.toml (or the [connections] table of config.toml),
- * selected the way snow selects them. Only PAT-style connections (a token
- * with authenticator PROGRAMMATIC_ACCESS_TOKEN, or a password) are usable;
- * browser/SSO/key-pair connections yield nothing here.
+ * selected the way snow selects them. Only PAT connections (a token with
+ * authenticator PROGRAMMATIC_ACCESS_TOKEN, or a password field holding a
+ * PAT) are usable; browser/SSO/key-pair connections yield nothing here.
  */
 function snowCliConnection(): Record<string, string> {
   const home = snowflakeHome();

@@ -17,9 +17,8 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   }
   const { sql } = assertReadOnly(rawSql);
 
-  await runQuery(`ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = ${timeout}`);
   const started = Date.now();
-  const { rows, total, numericColumns } = await runQuery(sql, { maxRows: limit });
+  const { rows, total, numericColumns } = await runQuery(sql, { maxRows: limit, timeoutSeconds: timeout });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
 
   if (total === 0) {

@@ -1,0 +1,189 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../src/config.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  loadConfig: () => ({
+    account: "MY_ORG-MY_ACCOUNT",
+    user: "SVC",
+    token: "the-pat",
+    role: "READER",
+    warehouse: "WH",
+    database: "DB",
+    schema: "PUBLIC",
+    modelDirs: [],
+  }),
+}));
+
+import { runQuery } from "../src/snowflake.js";
+
+const fetchMock = vi.fn();
+vi.stubGlobal("fetch", fetchMock);
+
+function jsonResponse(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), { status });
+}
+
+function okResult(overrides: Record<string, unknown> = {}): Response {
+  return jsonResponse(200, {
+    statementHandle: "h1",
+    resultSetMetaData: {
+      numRows: 2,
+      partitionInfo: [{ rowCount: 2 }],
+      rowType: [
+        { name: "A", type: "fixed" },
+        { name: "B", type: "text" },
+      ],
+    },
+    data: [
+      ["1", "x"],
+      ["2", null],
+    ],
+    ...overrides,
+  });
+}
+
+beforeEach(() => {
+  fetchMock.mockReset();
+});
+
+describe("runQuery over the SQL API", () => {
+  it("posts one statement with full context and returns decoded rows", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    const { rows, total, numericColumns } = await runQuery("SELECT 1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/^https:\/\/MY-ORG-MY-ACCOUNT\.snowflakecomputing\.com\/api\/v2\/statements\?requestId=/);
+    expect(init.headers.authorization).toBe("Bearer the-pat");
+    expect(init.headers["x-snowflake-authorization-token-type"]).toBe("PROGRAMMATIC_ACCESS_TOKEN");
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ statement: "SELECT 1", role: "READER", warehouse: "WH", database: "DB" });
+    expect(rows).toEqual([
+      { A: "1", B: "x" },
+      { A: "2", B: null },
+    ]);
+    expect(total).toBe(2);
+    expect(numericColumns).toEqual(new Set(["A"]));
+  });
+
+  it("maps binds and timeout into the request body", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT ?", { binds: ["PUBLIC", 5], timeoutSeconds: 30 });
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.timeout).toBe(30);
+    expect(body.bindings).toEqual({
+      "1": { type: "TEXT", value: "PUBLIC" },
+      "2": { type: "FIXED", value: "5" },
+    });
+  });
+
+  it("fetches only the partitions maxRows needs while reporting the full total", async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        okResult({
+          resultSetMetaData: {
+            numRows: 6,
+            partitionInfo: [{ rowCount: 2 }, { rowCount: 2 }, { rowCount: 2 }],
+            rowType: [{ name: "N", type: "fixed" }],
+          },
+          data: [["1"], ["2"]],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(200, { data: [["3"], ["4"]] }));
+    const { rows, total } = await runQuery("SELECT N", { maxRows: 3 });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[1][0]).toContain("/api/v2/statements/h1?partition=1");
+    expect(rows).toEqual([{ N: "1" }, { N: "2" }, { N: "3" }]);
+    expect(total).toBe(6);
+  });
+
+  it("decodes jsonv2 temporal wire formats to readable text", async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResult({
+        resultSetMetaData: {
+          numRows: 1,
+          partitionInfo: [{ rowCount: 1 }],
+          rowType: [
+            { name: "D", type: "date" },
+            { name: "T", type: "time" },
+            { name: "NTZ", type: "timestamp_ntz" },
+            { name: "LTZ", type: "timestamp_ltz" },
+            { name: "TZ", type: "timestamp_tz" },
+          ],
+        },
+        data: [
+          ["20641", "34245.500000000", "1783416600.123000000", "1783431000.000000000", "1783434600.000000000 1140"],
+        ],
+      }),
+    );
+    const { rows } = await runQuery("SELECT ...");
+    expect(rows[0]).toEqual({
+      D: "2026-07-07",
+      T: "09:30:45.5",
+      NTZ: "2026-07-07 09:30:00.123",
+      LTZ: "2026-07-07 13:30:00Z",
+      TZ: "2026-07-07 09:30:00-05:00",
+    });
+  });
+
+  it("translates SQL errors with a schema-lookup suggestion", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, { code: "000904", message: "SQL compilation error:\ninvalid identifier 'NOPE'" }),
+    );
+    await expect(runQuery("SELECT NOPE")).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      suggestions: ["Run `snowflake-axi schema <table>` to check the column names"],
+    });
+  });
+
+  it("translates auth failures by status", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { message: "Invalid token" }));
+    await expect(runQuery("SELECT 1")).rejects.toMatchObject({ code: "AUTH_ERROR" });
+  });
+
+  it("translates timeouts with a --timeout hint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(408, {
+        code: "000630",
+        message: "Statement reached its statement or warehouse timeout of 1 second(s) and was canceled.",
+      }),
+    );
+    await expect(runQuery("SELECT 1", { timeoutSeconds: 1 })).rejects.toMatchObject({
+      code: "TIMEOUT",
+      suggestions: ["Rerun with a higher --timeout <seconds> or narrow the query"],
+    });
+  });
+
+  it("retries a transient failure once, idempotently", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(503, {})).mockResolvedValueOnce(okResult());
+    const { total } = await runQuery("SELECT 1");
+    expect(total).toBe(2);
+    expect(fetchMock.mock.calls[1][0]).toContain("&retry=true");
+    const [first, second] = fetchMock.mock.calls.map(([url]) => new URL(url).searchParams.get("requestId"));
+    expect(second).toBe(first);
+  });
+
+  it("reports unreachable hosts as CONNECTION_ERROR after the retry", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    await expect(runQuery("SELECT 1")).rejects.toMatchObject({ code: "CONNECTION_ERROR" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("polls a 202 until the statement completes", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock
+        .mockResolvedValueOnce(jsonResponse(202, { statementStatusUrl: "/api/v2/statements/h1?requestId=r" }))
+        .mockResolvedValueOnce(jsonResponse(202, { statementStatusUrl: "/api/v2/statements/h1?requestId=r" }))
+        .mockResolvedValueOnce(okResult());
+      const promise = runQuery("SELECT SLOW()");
+      await vi.advanceTimersByTimeAsync(1100);
+      const { total } = await promise;
+      expect(total).toBe(2);
+      expect(fetchMock.mock.calls[1][0]).toBe(
+        "https://MY-ORG-MY-ACCOUNT.snowflakecomputing.com/api/v2/statements/h1?requestId=r",
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

@@ -23,46 +23,39 @@ describe("query command", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
-  it("sets the statement timeout and reports a definitive complete count", async () => {
-    runQuery
-      .mockResolvedValueOnce({ rows: [], total: 1 })
-      .mockResolvedValueOnce({ rows: [{ A: "1", B: "x" }], total: 1, numericColumns: new Set(["A"]) });
+  it("passes the statement timeout and reports a definitive complete count", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [{ A: "1", B: "x" }], total: 1, numericColumns: new Set(["A"]) });
     const output = (await queryCommand.run(["SELECT 1"])) as Record<string, unknown>;
-    expect(runQuery.mock.calls[0][0]).toBe("ALTER SESSION SET STATEMENT_TIMEOUT_IN_SECONDS = 60");
-    expect(runQuery.mock.calls[1][1]).toEqual({ maxRows: 50 });
+    expect(runQuery.mock.calls[0][1]).toEqual({ maxRows: 50, timeoutSeconds: 60 });
     expect(output.count).toBe("1 (complete)");
     expect(output.rows).toEqual([{ A: 1, B: "x" }]);
     expect(output.help).toBeUndefined();
   });
 
   it("keeps leading-zero strings intact for non-numeric columns", async () => {
-    runQuery
-      .mockResolvedValueOnce({ rows: [], total: 1 })
-      .mockResolvedValueOnce({ rows: [{ CODE: "007" }], total: 1, numericColumns: new Set() });
+    runQuery.mockResolvedValueOnce({ rows: [{ CODE: "007" }], total: 1, numericColumns: new Set() });
     const output = (await queryCommand.run(["SELECT '007' AS CODE"])) as Record<string, unknown>;
     expect(output.rows).toEqual([{ CODE: "007" }]);
   });
 
   it("reports partial counts with a raise-limit hint", async () => {
-    runQuery
-      .mockResolvedValueOnce({ rows: [], total: 1 })
-      .mockResolvedValueOnce({ rows: [{ A: "1" }, { A: "2" }], total: 84 });
+    runQuery.mockResolvedValueOnce({ rows: [{ A: "1" }, { A: "2" }], total: 84 });
     const output = (await queryCommand.run(["SELECT 1", "--limit", "2"])) as Record<string, unknown>;
     expect(output.count).toBe("2 of 84 total");
     expect((output.help as string[])[0]).toContain("--limit 84");
   });
 
   it("reports empty results definitively", async () => {
-    runQuery.mockResolvedValueOnce({ rows: [], total: 1 }).mockResolvedValueOnce({ rows: [], total: 0 });
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
     const output = (await queryCommand.run(["SELECT 1 WHERE 1=0"])) as Record<string, unknown>;
     expect(output.count).toBe("0 rows");
     expect(output.rows).toBeUndefined();
   });
 
   it("joins multiple positionals into one SQL string", async () => {
-    runQuery.mockResolvedValueOnce({ rows: [], total: 1 }).mockResolvedValueOnce({ rows: [], total: 0 });
+    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
     await queryCommand.run(["SELECT", "1"]);
-    expect(runQuery.mock.calls[1][0]).toBe("SELECT 1");
+    expect(runQuery.mock.calls[0][0]).toBe("SELECT 1");
   });
 
   it("requires SQL", async () => {

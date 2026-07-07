@@ -12,7 +12,6 @@ import { tablesCommand } from "./commands/tables.js";
 import { warehousesCommand } from "./commands/warehouses.js";
 import { envFilePath } from "./config.js";
 import { loadPlugins } from "./plugins.js";
-import { closeConnection } from "./snowflake.js";
 
 const DESCRIPTION = "Read-only Snowflake explorer for agents; TOON output, SELECT-only";
 
@@ -53,16 +52,12 @@ export async function main(): Promise<void> {
   const commands = Object.fromEntries(
     Object.entries(specs).map(([name, spec]) => [name, (args: string[]) => spec.run(args)]),
   );
-  try {
-    await runAxiCli({
-      description: DESCRIPTION,
-      version: pkg.version,
-      topLevelHelp: topLevelHelp(specs),
-      getCommandHelp: (command) => specs[command]?.help,
-      home: () => homeView(plugins.homeHelp),
-      commands,
-    });
-  } finally {
-    await closeConnection();
-  }
+  await runAxiCli({
+    description: DESCRIPTION,
+    version: pkg.version,
+    topLevelHelp: topLevelHelp(specs),
+    getCommandHelp: (command) => specs[command]?.help,
+    home: () => homeView(plugins.homeHelp),
+    commands,
+  });
 }
