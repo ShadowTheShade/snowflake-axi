@@ -5,7 +5,7 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
   const config = loadConfig();
   const [session, databases] = await Promise.all([
     runQuery(
-      "SELECT CURRENT_ACCOUNT() AS ACCOUNT, CURRENT_USER() AS USER, CURRENT_ROLE() AS ROLE, CURRENT_WAREHOUSE() AS WAREHOUSE",
+      "SELECT CURRENT_ACCOUNT() AS ACCOUNT, CURRENT_USER() AS USER, CURRENT_ROLE() AS ROLE, CURRENT_WAREHOUSE() AS WAREHOUSE, CURRENT_DATABASE() AS DATABASE, CURRENT_SCHEMA() AS SCHEMA",
     ),
     runQuery("SHOW DATABASES"),
   ]);
@@ -16,7 +16,7 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
       user: current.USER ?? config.user,
       role: current.ROLE ?? "",
       warehouse: current.WAREHOUSE ?? "",
-      default: [config.database, config.schema].filter(Boolean).join(".") || "(none)",
+      default: [current.DATABASE, current.SCHEMA].filter(Boolean).join(".") || "(none)",
     },
     databases: databases.rows.map((row) => ({ name: row.name })),
     help: [

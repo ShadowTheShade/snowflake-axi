@@ -36,7 +36,12 @@ SNOWFLAKE_USER=<service user>
 SNOWFLAKE_TOKEN=<programmatic access token>
 ```
 
-Everything else comes from the Snowflake user's own defaults, which is the recommended place to manage access:
+Everything else the tool derives at runtime, so there is nothing more to configure:
+
+- Role, warehouse, and default namespace come from the Snowflake user's own defaults; unqualified table names and the bare `tables` command resolve against `DEFAULT_NAMESPACE` inside the session.
+- dbt model directories are discovered from the working directory (`dbt_project.yml` upward and a few levels down, honoring `model-paths`).
+
+The Snowflake user is the recommended place to manage all of it:
 
 ```sql
 ALTER USER <service user> SET
@@ -53,7 +58,7 @@ Optional overrides for setups that want them pinned client-side:
 SNOWFLAKE_ROLE=<primary role per request>
 SNOWFLAKE_DATABASE=<default database>
 SNOWFLAKE_SCHEMA=<default schema>
-SNOWFLAKE_AXI_MODEL_DIRS=<colon-separated dbt model dirs, for the model command>
+SNOWFLAKE_AXI_MODEL_DIRS=<colon-separated dbt model dirs, used instead of discovery>
 SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT=<named file format, for the stage command>
 ```
 

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../src/config.js", () => ({ loadConfig, envFilePath: () => "/tmp/env" }));
 
-import { modelCommand } from "../src/commands/model.js";
+import { discoverModelDirs, modelCommand } from "../src/commands/model.js";
 
 const dir = mkdtempSync(join(tmpdir(), "axi-models-"));
 mkdirSync(join(dir, "intermediate"));
@@ -51,8 +51,39 @@ describe("model command", () => {
     expect((output.help as string[])[0]).toContain("stg_orders");
   });
 
-  it("fails with CONFIG_ERROR when no dirs configured", async () => {
+  it("fails with NOT_FOUND when no dbt project is discoverable", async () => {
     loadConfig.mockReturnValue({ modelDirs: [] });
-    await expect(modelCommand.run(["stg_orders"])).rejects.toMatchObject({ code: "CONFIG_ERROR" });
+    await expect(modelCommand.run(["stg_orders"])).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+});
+
+describe("dbt project discovery", () => {
+  const root = mkdtempSync(join(tmpdir(), "axi-discovery-"));
+  mkdirSync(join(root, "repo", "financial-analysis", "models"), { recursive: true });
+  mkdirSync(join(root, "repo", "node_modules", "junk"), { recursive: true });
+  writeFileSync(join(root, "repo", "financial-analysis", "dbt_project.yml"), 'name: fa\nmodel-paths: ["models"]\n');
+  mkdirSync(join(root, "block", "transform"), { recursive: true });
+  writeFileSync(join(root, "block", "dbt_project.yml"), "name: b\nmodel-paths:\n  - transform\n");
+  mkdirSync(join(root, "bare"), { recursive: true });
+  writeFileSync(join(root, "bare", "dbt_project.yml"), "name: bare\n");
+
+  it("finds a project below the working directory and reads inline model-paths", () => {
+    expect(discoverModelDirs(join(root, "repo"))).toEqual([join(root, "repo", "financial-analysis", "models")]);
+  });
+
+  it("finds a project above the working directory", () => {
+    expect(discoverModelDirs(join(root, "repo", "financial-analysis", "models"))).toEqual([
+      join(root, "repo", "financial-analysis", "models"),
+    ]);
+  });
+
+  it("reads block-style model-paths and defaults to models/", () => {
+    expect(discoverModelDirs(join(root, "block"))).toEqual([join(root, "block", "transform")]);
+    expect(discoverModelDirs(join(root, "bare"))).toEqual([join(root, "bare", "models")]);
+  });
+
+  it("finds nothing in a directory without dbt projects", () => {
+    const empty = mkdtempSync(join(tmpdir(), "axi-empty-"));
+    expect(discoverModelDirs(empty)).toEqual([]);
   });
 });

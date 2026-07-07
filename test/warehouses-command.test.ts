@@ -19,16 +19,18 @@ describe("warehouses command", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
-  it("notes the missing default database when metering cannot be looked up", async () => {
-    runQuery.mockResolvedValueOnce({
-      rows: [{ name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "Dev warehouse" }],
-      total: 1,
-    });
+  it("reads metering from the shared SNOWFLAKE database, no config needed", async () => {
+    runQuery.mockImplementation(async (sql: string) =>
+      sql.includes("SHOW WAREHOUSES")
+        ? { rows: [{ name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "Dev warehouse" }], total: 1 }
+        : { rows: [{ WAREHOUSE_NAME: "DEV_WH", CREDITS: "1.25" }], total: 1 },
+    );
     const output = (await warehousesCommand.run([])) as Record<string, unknown>;
     expect(output.count).toBe("1 warehouses");
-    expect(output.note).toContain("set SNOWFLAKE_DATABASE");
+    const metering = runQuery.mock.calls.find(([sql]) => sql.includes("WAREHOUSE_METERING_HISTORY"));
+    expect(metering?.[0]).toContain("SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY");
     expect(output.warehouses).toEqual([
-      { name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "Dev warehouse" },
+      { name: "DEV_WH", size: "X-Small", state: "SUSPENDED", comment: "Dev warehouse", credits_7d: 1.3 },
     ]);
   });
 

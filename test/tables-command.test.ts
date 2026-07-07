@@ -1,13 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQuery = vi.hoisted(() => vi.fn());
-const loadConfig = vi.hoisted(() => vi.fn());
 vi.mock("../src/snowflake.js", () => ({ runQuery }));
-vi.mock("../src/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/config.js")>()),
-  loadConfig,
-  envFilePath: () => "/tmp/env",
-}));
 
 import { tablesCommand } from "../src/commands/tables.js";
 
@@ -17,40 +11,39 @@ const BASE_ROWS = [
   { NAME: "V_SOMETHING", KIND: "VIEW", ROW_COUNT: null, BYTES: null },
 ];
 
+// No-scope invocations probe the session namespace and optimistically list in
+// parallel; this routes the mock by statement instead of call order.
+function stubSession(namespace: { DB: string | null; SC: string | null }, tables: Record<string, unknown>[] | null) {
+  runQuery.mockImplementation((sql: string) => {
+    if (sql.includes("CURRENT_DATABASE() AS DB")) return Promise.resolve({ rows: [namespace], total: 1 });
+    if (sql.includes("FROM INFORMATION_SCHEMA.TABLES")) {
+      return tables === null
+        ? Promise.reject(new Error("This session does not have a current database"))
+        : Promise.resolve({ rows: tables, total: tables.length });
+    }
+    if (sql === "SHOW DATABASES") {
+      return Promise.resolve({
+        rows: [
+          { name: "ANALYTICS_DB", comment: "warehouse models" },
+          { name: "RAW_DB", comment: "" },
+        ],
+        total: 2,
+      });
+    }
+    if (sql.includes("GROUP BY 1")) {
+      return Promise.resolve({ rows: [{ NAME: "PUBLIC", TABLES: "47", BYTES: "34482929664" }], total: 1 });
+    }
+    return Promise.reject(new Error(`unexpected statement: ${sql}`));
+  });
+}
+
 beforeEach(() => {
   runQuery.mockReset();
-  loadConfig.mockReset();
-  loadConfig.mockReturnValue({ database: "ANALYTICS_DB", schema: "PUBLIC", modelDirs: [] });
 });
 
 describe("tables command", () => {
-  it("falls back to readable databases when no scope and no default exist", async () => {
-    loadConfig.mockReturnValue({ modelDirs: [] });
-    runQuery.mockResolvedValueOnce({
-      rows: [
-        { name: "ANALYTICS_DB", comment: "warehouse models" },
-        { name: "RAW_DB", comment: "" },
-      ],
-      total: 2,
-    });
-    const output = (await tablesCommand.run([])) as Record<string, unknown>;
-    expect(runQuery.mock.calls[0][0]).toBe("SHOW DATABASES");
-    expect(output.count).toBe("2 databases");
-    expect(output.databases).toEqual([{ name: "ANALYTICS_DB", comment: "warehouse models" }, { name: "RAW_DB" }]);
-    expect((output.help as string[])[0]).toContain("tables <db>");
-  });
-
-  it("filters the database fallback with --like and reports empty definitively", async () => {
-    loadConfig.mockReturnValue({ modelDirs: [] });
-    runQuery.mockResolvedValue({ rows: [{ name: "ANALYTICS_DB" }, { name: "RAW_DB" }], total: 2 });
-    const filtered = (await tablesCommand.run(["--like", "raw"])) as Record<string, unknown>;
-    expect(filtered.databases).toEqual([{ name: "RAW_DB" }]);
-    const none = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
-    expect(none.count).toBe("0 databases matching 'nope' readable with this role");
-  });
-
-  it("lists default-scope tables largest first, excluding views with a note", async () => {
-    runQuery.mockResolvedValueOnce({ rows: BASE_ROWS, total: 3 });
+  it("lists default-namespace tables largest first, excluding views with a note", async () => {
+    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, BASE_ROWS);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;
     expect(output.scope).toBe("ANALYTICS_DB.PUBLIC");
     expect(output.count).toBe("2 tables, largest first (1 views excluded; use --views)");
@@ -58,13 +51,36 @@ describe("tables command", () => {
       { name: "EVENTS", rows: 48210332, size: "18.2GB" },
       { name: "FCT_ORDERS", rows: 4812093, size: "1.9GB" },
     ]);
-    const [sql, options] = runQuery.mock.calls[0];
-    expect(sql).toContain("ANALYTICS_DB.INFORMATION_SCHEMA.TABLES");
-    expect(options.binds).toEqual(["PUBLIC"]);
+    const listing = runQuery.mock.calls.find(([sql]) => sql.includes("FROM INFORMATION_SCHEMA.TABLES"));
+    expect(listing?.[0]).toContain("TABLE_SCHEMA = CURRENT_SCHEMA()");
+    expect(listing?.[1].binds).toEqual([]);
+  });
+
+  it("falls back to readable databases when the session has no namespace", async () => {
+    stubSession({ DB: null, SC: null }, null);
+    const output = (await tablesCommand.run([])) as Record<string, unknown>;
+    expect(output.count).toBe("2 databases");
+    expect(output.databases).toEqual([{ name: "ANALYTICS_DB", comment: "warehouse models" }, { name: "RAW_DB" }]);
+    expect((output.help as string[])[0]).toContain("tables <db>");
+  });
+
+  it("falls back to the schema summary when the session has a database but no schema", async () => {
+    stubSession({ DB: "ANALYTICS_DB", SC: null }, []);
+    const output = (await tablesCommand.run([])) as Record<string, unknown>;
+    expect(output.database).toBe("ANALYTICS_DB");
+    expect(output.schemas).toEqual([{ name: "PUBLIC", tables: 47, size: "32.1GB" }]);
+  });
+
+  it("filters the database fallback with --like and reports empty definitively", async () => {
+    stubSession({ DB: null, SC: null }, null);
+    const filtered = (await tablesCommand.run(["--like", "raw"])) as Record<string, unknown>;
+    expect(filtered.databases).toEqual([{ name: "RAW_DB" }]);
+    const none = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
+    expect(none.count).toBe("0 databases matching 'nope' readable with this role");
   });
 
   it("includes views with a kind column under --views", async () => {
-    runQuery.mockResolvedValueOnce({ rows: BASE_ROWS, total: 3 });
+    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, BASE_ROWS);
     const output = (await tablesCommand.run(["--views"])) as Record<string, unknown>;
     const tables = output.tables as Record<string, unknown>[];
     expect(tables).toHaveLength(3);
@@ -72,9 +88,21 @@ describe("tables command", () => {
   });
 
   it("wraps bare --like words as contains patterns", async () => {
-    runQuery.mockResolvedValueOnce({ rows: [BASE_ROWS[1]], total: 1 });
+    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, [BASE_ROWS[1]]);
     await tablesCommand.run(["--like", "fact"]);
-    expect(runQuery.mock.calls[0][1].binds).toEqual(["PUBLIC", "%fact%"]);
+    const listing = runQuery.mock.calls.find(([sql]) => sql.includes("FROM INFORMATION_SCHEMA.TABLES"));
+    expect(listing?.[1].binds).toEqual(["%fact%"]);
+  });
+
+  it("queries an explicit db.schema scope with binds and no probe", async () => {
+    runQuery.mockResolvedValueOnce({ rows: BASE_ROWS, total: 3 });
+    const output = (await tablesCommand.run(["analytics_db.public"])) as Record<string, unknown>;
+    expect(output.scope).toBe("ANALYTICS_DB.PUBLIC");
+    expect(runQuery).toHaveBeenCalledTimes(1);
+    const [sql, options] = runQuery.mock.calls[0];
+    expect(sql).toContain("ANALYTICS_DB.INFORMATION_SCHEMA.TABLES");
+    expect(sql).toContain("TABLE_SCHEMA = ?");
+    expect(options.binds).toEqual(["PUBLIC"]);
   });
 
   it("summarizes schemas at database scope", async () => {
@@ -121,8 +149,13 @@ describe("tables command", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
+  it("rejects --views when the session resolves above schema level", async () => {
+    stubSession({ DB: null, SC: null }, null);
+    await expect(tablesCommand.run(["--views"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+  });
+
   it("reports empty scopes definitively", async () => {
-    runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
+    stubSession({ DB: "ANALYTICS_DB", SC: "PUBLIC" }, []);
     const output = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
     expect(output.count).toBe("0 tables matching '%nope%' in ANALYTICS_DB.PUBLIC");
   });

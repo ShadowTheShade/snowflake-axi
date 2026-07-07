@@ -1,5 +1,4 @@
 import { type CommandArgs, defineCommand } from "../command.js";
-import { loadConfig } from "../config.js";
 import { cellValue } from "../format.js";
 import { runQuery } from "../snowflake.js";
 
@@ -8,14 +7,10 @@ const COMMENT_LIMIT = 100;
 type Metering = { credits: Map<string, number> } | { note: string };
 
 async function creditsBy7d(): Promise<Metering> {
-  const config = loadConfig();
-  if (!config.database) {
-    return { note: "credits_7d omitted: set SNOWFLAKE_DATABASE to enable the metering lookup" };
-  }
   try {
     const { rows } = await runQuery(
       `SELECT WAREHOUSE_NAME, SUM(CREDITS_USED) AS CREDITS
-       FROM TABLE(${config.database}.INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY(
+       FROM TABLE(SNOWFLAKE.INFORMATION_SCHEMA.WAREHOUSE_METERING_HISTORY(
          DATEADD('day', -7, CURRENT_TIMESTAMP()), CURRENT_TIMESTAMP()))
        GROUP BY 1`,
     );

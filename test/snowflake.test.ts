@@ -149,6 +149,24 @@ describe("runQuery over the SQL API", () => {
     });
   });
 
+  it("suggests DEFAULT_NAMESPACE when the session has no current database", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, {
+        code: "090105",
+        message:
+          "Unable to run the SELECT command. You must specify the database to use by either setting the database field in the body of the request or by setting the DEFAULT_NAMESPACE property for the current user.",
+      }),
+    );
+    await expect(runQuery("SELECT 1")).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      message: "The session has no default database/schema, so unqualified names cannot resolve",
+      suggestions: [
+        "Qualify the name as db.schema.table",
+        "Or give the user a durable default: ALTER USER <user> SET DEFAULT_NAMESPACE = '<db>.<schema>'",
+      ],
+    });
+  });
+
   it("translates auth failures by status", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { message: "Invalid token" }));
     await expect(runQuery("SELECT 1")).rejects.toMatchObject({ code: "AUTH_ERROR" });

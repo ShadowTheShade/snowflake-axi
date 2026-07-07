@@ -169,6 +169,16 @@ function translateError(status: number, message: string): AxiError {
   if (status === 408 || /statement or warehouse timeout/i.test(compact)) {
     return new AxiError(compact, "TIMEOUT", ["Rerun with a higher --timeout <seconds> or narrow the query"]);
   }
+  if (/does not have a current (database|schema)|DEFAULT_NAMESPACE property/i.test(compact)) {
+    return new AxiError(
+      "The session has no default database/schema, so unqualified names cannot resolve",
+      "SNOWFLAKE_ERROR",
+      [
+        "Qualify the name as db.schema.table",
+        "Or give the user a durable default: ALTER USER <user> SET DEFAULT_NAMESPACE = '<db>.<schema>'",
+      ],
+    );
+  }
   if (/invalid identifier/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", ["Run `snowflake-axi schema <table>` to check the column names"]);
   }

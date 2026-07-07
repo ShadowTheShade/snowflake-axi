@@ -6,13 +6,14 @@ import { runQuery } from "../snowflake.js";
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const name = resolveTableName(args.positionals[0]);
 
+  const infoSchema = name.database ? `${name.database}.INFORMATION_SCHEMA.TABLES` : "INFORMATION_SCHEMA.TABLES";
+  const schemaFilter = name.schema ? "TABLE_SCHEMA = ?" : "TABLE_SCHEMA = CURRENT_SCHEMA()";
+  const binds = name.schema ? [name.schema, name.table] : [name.table];
   const [columns, meta] = await Promise.all([
     runQuery(`DESC TABLE ${name.fqn}`),
-    runQuery(
-      `SELECT TABLE_TYPE, ROW_COUNT, BYTES FROM ${name.database}.INFORMATION_SCHEMA.TABLES
-       WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?`,
-      { binds: [name.schema, name.table] },
-    ),
+    runQuery(`SELECT TABLE_TYPE, ROW_COUNT, BYTES FROM ${infoSchema} WHERE ${schemaFilter} AND TABLE_NAME = ?`, {
+      binds,
+    }),
   ]);
 
   const info = meta.rows[0];
@@ -35,7 +36,9 @@ export const schemaCommand = defineCommand("schema", {
   action: {
     description: "Columns with types and nullability, plus row count and size",
     positionals: { usage: "<table>", min: 1, max: 1 },
-    notes: ["Table names resolve as table, schema.table, or db.schema.table against the configured defaults."],
+    notes: [
+      "Table names resolve as table, schema.table, or db.schema.table; unqualified parts use the session's default namespace.",
+    ],
     examples: ["snowflake-axi schema FCT_ORDERS", "snowflake-axi schema ANALYTICS_DB.PUBLIC.DIM_CUSTOMERS"],
     run,
   },

@@ -1,11 +1,13 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { type Dirent, existsSync, readdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
 
 const SQL_LIMIT = 1500;
+const DISCOVERY_DEPTH = 3;
+const SKIPPED_DIRS = new Set(["node_modules", "target", "dbt_packages", "venv", ".venv", "dist"]);
 
 interface ModelFile {
   name: string;
@@ -15,6 +17,76 @@ interface ModelFile {
 function collapseHome(path: string): string {
   const home = homedir();
   return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
+
+// dbt_project.yml is YAML, but model-paths is virtually always either the
+// inline-list or block-list form; a full YAML parser is not worth a dependency.
+function modelPaths(projectFile: string): string[] {
+  let yml: string;
+  try {
+    yml = readFileSync(projectFile, "utf8");
+  } catch {
+    return ["models"];
+  }
+  const unquote = (s: string) => s.trim().replace(/^['"]|['"]$/g, "");
+  const inline = yml.match(/^model-paths\s*:\s*\[([^\]]*)\]/m);
+  if (inline) {
+    const paths = inline[1].split(",").map(unquote).filter(Boolean);
+    if (paths.length > 0) return paths;
+  }
+  const block = yml.match(/^model-paths\s*:\s*\r?\n((?:[ \t]+-[^\n]*\r?\n?)+)/m);
+  if (block) {
+    const paths = block[1]
+      .split("\n")
+      .map((line) => unquote(line.replace(/^[ \t]+-/, "")))
+      .filter(Boolean);
+    if (paths.length > 0) return paths;
+  }
+  return ["models"];
+}
+
+/** dbt projects at or above cwd, plus a shallow scan below it. */
+function discoverProjectFiles(start: string): string[] {
+  const found: string[] = [];
+  for (let dir = start; ; dir = dirname(dir)) {
+    const candidate = join(dir, "dbt_project.yml");
+    if (existsSync(candidate)) found.push(candidate);
+    if (dir === dirname(dir) || dir === homedir()) break;
+  }
+  let level = [start];
+  for (let depth = 0; depth < DISCOVERY_DEPTH && level.length > 0; depth++) {
+    const next: string[] = [];
+    for (const dir of level) {
+      let entries: Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith(".") || SKIPPED_DIRS.has(entry.name)) continue;
+        const child = join(dir, entry.name);
+        const candidate = join(child, "dbt_project.yml");
+        if (existsSync(candidate)) found.push(candidate);
+        else next.push(child);
+      }
+    }
+    level = next;
+  }
+  return [...new Set(found)];
+}
+
+/** Model directories of every dbt project discovered around `start`. */
+export function discoverModelDirs(start: string): string[] {
+  return discoverProjectFiles(start).flatMap((projectFile) =>
+    modelPaths(projectFile).map((path) => join(dirname(projectFile), path)),
+  );
+}
+
+function modelDirs(): string[] {
+  const config = loadConfig();
+  if (config.modelDirs.length > 0) return config.modelDirs;
+  return discoverModelDirs(process.cwd());
 }
 
 function listModels(dirs: string[]): ModelFile[] {
@@ -49,15 +121,16 @@ function editDistance(a: string, b: string): number {
 }
 
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
-  const config = loadConfig();
-  if (config.modelDirs.length === 0) {
-    throw new AxiError("No model directories configured", "CONFIG_ERROR", [
-      "Set SNOWFLAKE_AXI_MODEL_DIRS in the env file (colon-separated dbt model dirs)",
+  const dirs = modelDirs();
+  if (dirs.length === 0) {
+    throw new AxiError(`No dbt project found around ${collapseHome(process.cwd())}`, "NOT_FOUND", [
+      "Run from inside a dbt repo (dbt_project.yml is discovered upward and a few levels down)",
+      "Or pin directories with SNOWFLAKE_AXI_MODEL_DIRS in the env file (colon-separated)",
     ]);
   }
 
   const query = args.positionals[0].toLowerCase().replace(/\.sql$/, "");
-  const models = listModels(config.modelDirs);
+  const models = listModels(dirs);
   const exact = models.filter((m) => m.name.toLowerCase() === query);
   const matches = exact.length > 0 ? exact : models.filter((m) => m.name.toLowerCase().includes(query));
 
@@ -67,7 +140,7 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
       .sort((a, b) => a.distance - b.distance)
       .slice(0, 3);
     return {
-      count: `0 models match '${query}' in ${config.modelDirs.map(collapseHome).join(", ")}`,
+      count: `0 models match '${query}' in ${dirs.map(collapseHome).join(", ")}`,
       ...(nearest.length > 0 ? { help: nearest.map(({ m }) => `Did you mean: snowflake-axi model ${m.name}`) } : {}),
     };
   }
@@ -94,14 +167,14 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
 export const modelCommand = defineCommand("model", {
   summary: "Show the dbt model SQL behind a table",
   action: {
-    description: "Find a dbt model by filename across the configured model directories and show its SQL",
+    description: "Find a dbt model by filename across discovered dbt projects and show its SQL",
     positionals: { usage: "<name>", min: 1, max: 1 },
     flags: {
       "--full": { type: "boolean", description: `show the complete SQL (default truncates at ${SQL_LIMIT} chars)` },
     },
     notes: [
       "Matching is case-insensitive: exact filename first, then contains.",
-      "Directories come from SNOWFLAKE_AXI_MODEL_DIRS in the env file.",
+      "dbt projects are discovered from the working directory (dbt_project.yml upward and a few levels down); SNOWFLAKE_AXI_MODEL_DIRS overrides.",
     ],
     examples: ["snowflake-axi model stg_orders", "snowflake-axi model fct_revenue --full"],
     run,

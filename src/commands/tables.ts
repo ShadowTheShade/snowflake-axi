@@ -1,9 +1,14 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { loadConfig } from "../config.js";
 import { humanBytes } from "../format.js";
 import { likePattern, parseScope } from "../names.js";
 import { runQuery } from "../snowflake.js";
+
+interface ListOptions {
+  like?: string;
+  limit: number;
+  includeViews: boolean;
+}
 
 async function schemasSummary(
   database: string,
@@ -42,8 +47,8 @@ async function schemasSummary(
   };
 }
 
-// With no scope argument and no configured default, the account level is the
-// natural answer: list what is readable and teach the drill-down.
+// With no scope argument and no default namespace on the user, the account
+// level is the natural answer: list what is readable and teach the drill-down.
 async function databasesSummary(like: string | undefined, limit: number): Promise<Record<string, unknown>> {
   const { rows } = await runQuery("SHOW DATABASES");
   const pattern = like === undefined ? undefined : new RegExp(likePattern(like).replace(/%/g, ".*"), "i");
@@ -63,58 +68,42 @@ async function databasesSummary(like: string | undefined, limit: number): Promis
   };
 }
 
-async function run(args: CommandArgs): Promise<Record<string, unknown>> {
-  const config = loadConfig();
-  const scope = parseScope(args.positionals[0]);
-  const includeViews = args.bool("--views");
-  const limit = args.int("--limit");
-  const like = args.str("--like");
-
-  const database = scope.database ?? config.database?.toUpperCase();
-  if (!database) {
-    if (includeViews) {
-      throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
-        "Run `snowflake-axi tables <db>.<schema> --views`",
-      ]);
-    }
-    return databasesSummary(like, limit);
-  }
-  const schema = scope.schema ?? (scope.database ? undefined : config.schema?.toUpperCase());
-  if (!schema) {
-    if (includeViews) {
-      throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
-        `Run \`snowflake-axi tables ${database}.<schema> --views\``,
-      ]);
-    }
-    return schemasSummary(database, { like, limit });
-  }
-
-  const binds: string[] = [schema];
+function fetchTables(
+  infoSchema: string,
+  schemaFilter: string,
+  binds: string[],
+  like: string | undefined,
+): Promise<{ rows: Record<string, unknown>[] }> {
   let filter = "";
   if (like !== undefined) {
     filter = " AND TABLE_NAME ILIKE ?";
-    binds.push(likePattern(like));
+    binds = [...binds, likePattern(like)];
   }
-  const { rows } = await runQuery(
+  return runQuery(
     `SELECT TABLE_NAME AS NAME, TABLE_TYPE AS KIND, ROW_COUNT, BYTES
-     FROM ${database}.INFORMATION_SCHEMA.TABLES
-     WHERE TABLE_SCHEMA = ?${filter}
+     FROM ${infoSchema}
+     WHERE ${schemaFilter}${filter}
      ORDER BY ROW_COUNT DESC NULLS LAST, TABLE_NAME`,
     { binds },
   );
+}
 
-  const scopeLabel = `${database}.${schema}`;
-  const matchLabel = like !== undefined ? ` matching '${likePattern(like)}'` : "";
+function formatTables(
+  rows: Record<string, unknown>[],
+  scopeLabel: string,
+  options: ListOptions,
+): Record<string, unknown> {
+  const matchLabel = options.like !== undefined ? ` matching '${likePattern(options.like)}'` : "";
   const views = rows.filter((row) => row.KIND === "VIEW");
-  const listed = includeViews ? rows : rows.filter((row) => row.KIND !== "VIEW");
+  const listed = options.includeViews ? rows : rows.filter((row) => row.KIND !== "VIEW");
 
   if (listed.length === 0) {
-    const viewNote = !includeViews && views.length > 0 ? ` (${views.length} views excluded; use --views)` : "";
+    const viewNote = !options.includeViews && views.length > 0 ? ` (${views.length} views excluded; use --views)` : "";
     return { scope: scopeLabel, count: `0 tables${matchLabel} in ${scopeLabel}${viewNote}` };
   }
 
-  const shown = listed.slice(0, limit);
-  const viewNote = includeViews ? "" : views.length > 0 ? ` (${views.length} views excluded; use --views)` : "";
+  const shown = listed.slice(0, options.limit);
+  const viewNote = options.includeViews ? "" : views.length > 0 ? ` (${views.length} views excluded; use --views)` : "";
   const help = [
     "Run `snowflake-axi schema <table>` for columns",
     'Run `snowflake-axi query "SELECT ..."` to aggregate or filter',
@@ -127,12 +116,68 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
     count: `${listed.length} tables${matchLabel}, largest first${viewNote}`,
     tables: shown.map((row) => ({
       name: row.NAME,
-      ...(includeViews ? { kind: row.KIND === "BASE TABLE" ? "TABLE" : row.KIND } : {}),
+      ...(options.includeViews ? { kind: row.KIND === "BASE TABLE" ? "TABLE" : row.KIND } : {}),
       rows: row.ROW_COUNT === null || row.ROW_COUNT === undefined ? "" : Number(row.ROW_COUNT),
       size: humanBytes(row.BYTES === null || row.BYTES === undefined ? null : Number(row.BYTES)),
     })),
     help,
   };
+}
+
+// The session's default namespace (DEFAULT_NAMESPACE on the user, or env
+// overrides) decides the level; without one, fall upward to schemas or
+// databases. The listing is attempted optimistically in parallel with the
+// namespace probe so the common case costs one round trip of latency.
+async function defaultScope(options: ListOptions): Promise<Record<string, unknown>> {
+  const [probe, attempt] = await Promise.all([
+    runQuery("SELECT CURRENT_DATABASE() AS DB, CURRENT_SCHEMA() AS SC"),
+    fetchTables("INFORMATION_SCHEMA.TABLES", "TABLE_SCHEMA = CURRENT_SCHEMA()", [], options.like).catch(
+      (error: unknown) => error,
+    ),
+  ]);
+  const database = String(probe.rows[0]?.DB ?? "").toUpperCase();
+  const schema = String(probe.rows[0]?.SC ?? "").toUpperCase();
+  if (database && schema) {
+    if (attempt instanceof Error) throw attempt;
+    return formatTables((attempt as { rows: Record<string, unknown>[] }).rows, `${database}.${schema}`, options);
+  }
+  if (options.includeViews) {
+    throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
+      "Run `snowflake-axi tables <db>.<schema> --views`",
+    ]);
+  }
+  if (database) {
+    return schemasSummary(database, options);
+  }
+  return databasesSummary(options.like, options.limit);
+}
+
+async function run(args: CommandArgs): Promise<Record<string, unknown>> {
+  const scope = parseScope(args.positionals[0]);
+  const options: ListOptions = {
+    like: args.str("--like"),
+    limit: args.int("--limit"),
+    includeViews: args.bool("--views"),
+  };
+
+  if (scope.database && scope.schema) {
+    const { rows } = await fetchTables(
+      `${scope.database}.INFORMATION_SCHEMA.TABLES`,
+      "TABLE_SCHEMA = ?",
+      [scope.schema],
+      options.like,
+    );
+    return formatTables(rows, `${scope.database}.${scope.schema}`, options);
+  }
+  if (scope.database) {
+    if (options.includeViews) {
+      throw new AxiError("Flag --views applies to a schema scope", "VALIDATION_ERROR", [
+        `Run \`snowflake-axi tables ${scope.database}.<schema> --views\``,
+      ]);
+    }
+    return schemasSummary(scope.database, options);
+  }
+  return defaultScope(options);
 }
 
 export const tablesCommand = defineCommand("tables", {
@@ -151,7 +196,7 @@ export const tablesCommand = defineCommand("tables", {
       "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
     },
     notes: [
-      "(no scope): tables in the default database.schema; with no default configured, readable databases",
+      "(no scope): tables in the session's default namespace; without one, readable databases",
       "db: schema summary for that database",
       "db.schema: tables in that schema",
     ],
