@@ -11,11 +11,15 @@ export interface CliResult {
 }
 
 /** Runs the built CLI as a subprocess, the way an agent does. */
-export async function cli(args: string[], env: Record<string, string> = {}): Promise<CliResult> {
+export async function cli(
+  args: string[],
+  env: Record<string, string> = {},
+  timeoutMs = 60000,
+): Promise<CliResult> {
   try {
     const { stdout } = await exec(process.execPath, [BIN, ...args], {
       env: { ...process.env, ...env },
-      timeout: 60000,
+      timeout: timeoutMs,
     });
     return { stdout, code: 0 };
   } catch (error) {

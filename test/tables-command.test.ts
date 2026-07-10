@@ -64,6 +64,14 @@ describe("tables command", () => {
     expect((output.help as string[])[0]).toContain("tables <db>");
   });
 
+  it("reveals truncation when more databases match than the limit shows", async () => {
+    stubSession({ DB: null, SC: null }, null);
+    const output = (await tablesCommand.run(["--limit", "1"])) as Record<string, unknown>;
+    expect(output.count).toBe("2 databases");
+    expect(output.databases).toEqual([{ name: "SCOOPS_DB", comment: "warehouse models" }]);
+    expect((output.help as string[])[0]).toContain("--limit 2` for all 2 databases");
+  });
+
   it("falls back to the schema summary when the session has a database but no schema", async () => {
     stubSession({ DB: "SCOOPS_DB", SC: null }, []);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;

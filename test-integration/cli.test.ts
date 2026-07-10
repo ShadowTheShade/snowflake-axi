@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../src/config.js";
 import { cli } from "./harness.js";
 
@@ -80,6 +80,16 @@ describe("offline behaviors (no credentials required)", () => {
 });
 
 describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
+  // A suspended warehouse resumes on the first compute-bearing statement, and
+  // that latency can blow a 30s test budget. Pay it once here, outside any
+  // test, so the tests themselves keep tight timeouts that catch real hangs.
+  // GENERATOR forces compute; a constant SELECT can be served without a
+  // warehouse and would not resume it. Failures are ignored: the tests report
+  // real errors better than a warm-up can.
+  beforeAll(async () => {
+    await cli(["query", "SELECT MAX(SEQ4()) FROM TABLE(GENERATOR(ROWCOUNT => 10))", "--timeout", "90"], {}, 110000);
+  }, 120000);
+
   it("home view shows connection context and databases", async () => {
     const { stdout, code } = await cli([]);
     expect(code).toBe(0);

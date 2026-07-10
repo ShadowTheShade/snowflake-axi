@@ -58,13 +58,22 @@ async function databasesSummary(like: string | undefined, limit: number): Promis
     return { count: `0 databases${matchLabel} readable with this role` };
   }
   const shown = matching.slice(0, limit);
+  const help = ["Run `snowflake-axi tables <db>` for its schemas, `snowflake-axi tables <db>.<schema>` for tables"];
+  if (shown.length < matching.length) {
+    // SHOW DATABASES is alphabetical, so unlike the size-ordered lists the cut
+    // is arbitrary; the reveal hint keeps a truncated list from reading as
+    // "these are all the databases".
+    help.unshift(
+      `Run \`snowflake-axi tables --limit ${matching.length}\` for all ${matching.length} databases, or narrow with --like`,
+    );
+  }
   return {
     count: `${matching.length} databases${matchLabel}`,
     databases: shown.map((row) => ({
       name: row.name,
       ...(row.comment ? { comment: row.comment } : {}),
     })),
-    help: ["Run `snowflake-axi tables <db>` for its schemas, `snowflake-axi tables <db>.<schema>` for tables"],
+    help,
   };
 }
 
