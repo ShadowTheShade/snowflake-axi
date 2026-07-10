@@ -121,11 +121,7 @@ describe("hooks remove", () => {
 
 describe("hooks status", () => {
   it("reports installed commands and definitive absence", () => {
-    expect(hookStatuses(home).map((r) => r.status)).toEqual([
-      "(not installed)",
-      "(not installed)",
-      "(not installed)",
-    ]);
+    expect(hookStatuses(home).map((r) => r.status)).toEqual(["(not installed)", "(not installed)", "(not installed)"]);
     installHooks(home, EXEC);
     expect(hookStatuses(home).map((r) => r.status)).toEqual([EXEC, EXEC, EXEC]);
   });

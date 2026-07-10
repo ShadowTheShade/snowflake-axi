@@ -61,8 +61,7 @@ function portableContext() {
   const rawPath = process.env.PATH ?? "";
   return {
     pathEntries: rawPath.split(delimiter).filter(Boolean),
-    pathExtensions:
-      process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""],
+    pathExtensions: process.platform === "win32" ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""],
     resolveRealPath: (path: string) => {
       try {
         if (!statSync(path).isFile()) return undefined;
@@ -182,8 +181,7 @@ export function installHooks(home: string, execPath: string): TargetResult[] {
     onError: (message) => errors.push(message),
   });
   const after = snapshot(home);
-  const errorFor = (file: string) =>
-    errors.find((message) => message.startsWith(`${file}: `))?.slice(file.length + 2);
+  const errorFor = (file: string) => errors.find((message) => message.startsWith(`${file}: `))?.slice(file.length + 2);
 
   const results = jsonTargets(home).map((target, i) => ({
     ...target,

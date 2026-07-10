@@ -4,8 +4,7 @@ import { loadConfig } from "../config.js";
 export const contextCommand = defineCommand("context", {
   summary: "Compact config-derived context line for session-start hooks",
   action: {
-    description:
-      "Print a compact orientation line for session-start hooks: config-derived only, no connection is made",
+    description: "Print a compact orientation line for session-start hooks: config-derived only, no connection is made",
     run: () => {
       let config: ReturnType<typeof loadConfig>;
       try {

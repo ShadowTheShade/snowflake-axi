@@ -30,7 +30,9 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
     databases: shown.map((row) => ({ name: row.name })),
     help: [
       ...(truncated
-        ? [`Run \`snowflake-axi query "SHOW DATABASES" --limit ${databases.rows.length}\` for all ${databases.rows.length} databases`]
+        ? [
+            `Run \`snowflake-axi query "SHOW DATABASES" --limit ${databases.rows.length}\` for all ${databases.rows.length} databases`,
+          ]
         : []),
       "Run `snowflake-axi tables [db[.schema]]` to list tables with row counts",
       'Run `snowflake-axi query "SELECT ..."` to run read-only SQL',
