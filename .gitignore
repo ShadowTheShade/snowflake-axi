@@ -4,3 +4,5 @@ reference/
 .env
 node_modules/
 dist/
+.lavish/
+.claude/settings.local.json
