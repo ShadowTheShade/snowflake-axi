@@ -1,5 +1,6 @@
 import { AxiError } from "axi-sdk-js";
-import { type CommandArgs, defineCommand } from "../command.js";
+import { type ActionDef, type CommandArgs, defineCommand, type FlagDef } from "../command.js";
+import { type LocalVerb, runLocalDbt } from "../dbt-local.js";
 import { requireGrant } from "../grants.js";
 import { IDENTIFIER, parseScope, resolveRepoName, type Scope, safeLike, scopeClause, scopeLabel } from "../names.js";
 import { runQuery } from "../snowflake.js";
@@ -295,6 +296,80 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
   };
 }
 
+const SELECT_FLAG: FlagDef = {
+  type: "string",
+  placeholder: "<spec>",
+  description:
+    'dbt node selector: model_x, +model_x (with ancestors), model_x+ (with descendants), tag:nightly; quote a union into one value: --select "model_x+ model_y+"',
+};
+const EXCLUDE_FLAG: FlagDef = { type: "string", placeholder: "<spec>", description: "dbt node selector to skip" };
+const LOCAL_TARGET_FLAG: FlagDef = {
+  type: "string",
+  placeholder: "<name>",
+  description: "target from the repo's profiles.yml (default: SNOWFLAKE_AXI_DBT_TARGET from the tool config)",
+};
+const PROJECT_DIR_FLAG: FlagDef = {
+  type: "string",
+  placeholder: "<path>",
+  description: "dbt project root (default: current directory)",
+};
+
+function localTimeoutFlag(defaultSeconds: number): FlagDef {
+  return {
+    type: "int",
+    placeholder: "<s>",
+    description: "kill the dbt subprocess after this many seconds",
+    default: defaultSeconds,
+    min: 1,
+    max: 14400,
+  };
+}
+
+function runLocal(args: CommandArgs, verb: LocalVerb): Promise<Record<string, unknown>> {
+  return runLocalDbt({
+    verb,
+    projectDir: args.str("--project-dir"),
+    target: args.str("--target"),
+    select: args.str("--select"),
+    exclude: args.str("--exclude"),
+    fullRefresh: args.bool("--full-refresh"),
+    failFast: args.bool("--fail-fast"),
+    timeoutSeconds: args.int("--timeout"),
+  });
+}
+
+// The gated local verbs mirror dbt's own vocabulary 1:1; all share the single
+// dbt.build grant because each one writes to the chosen target.
+function localWrite(
+  verb: LocalVerb,
+  description: string,
+  options: { fullRefresh?: boolean; notes?: string[]; examples: string[] },
+): ActionDef {
+  return {
+    description: `${description} (write; dbt.build grant)`,
+    flags: {
+      "--select": SELECT_FLAG,
+      "--exclude": EXCLUDE_FLAG,
+      "--target": LOCAL_TARGET_FLAG,
+      ...(options.fullRefresh
+        ? { "--full-refresh": { type: "boolean", description: "rebuild incremental models from scratch" } as FlagDef }
+        : {}),
+      "--fail-fast": { type: "boolean", description: "stop at the first failure" },
+      "--project-dir": PROJECT_DIR_FLAG,
+      "--timeout": localTimeoutFlag(1800),
+    },
+    notes: [
+      "Refused with WRITE_NOT_ALLOWED until the user grants dbt.build (see `snowflake-axi allow --help`).",
+      ...(options.notes ?? []),
+    ],
+    examples: options.examples,
+    run: (args) => {
+      requireGrant("dbt.build");
+      return runLocal(args, verb);
+    },
+  };
+}
+
 async function drop(args: CommandArgs): Promise<Record<string, unknown>> {
   requireGrant("dbt.drop");
   const role = args.str("--role");
@@ -315,9 +390,34 @@ async function drop(args: CommandArgs): Promise<Record<string, unknown>> {
   return { project: fqn, dropped: true };
 }
 
+const NO_CREDS_HINT = (verb: string) =>
+  `\`dbt ${verb}\` needs no Snowflake credentials; run the dbt CLI directly in the repo`;
+const UNWRAPPED_HINT = "This dbt verb is outside the wrapped surface";
+
 export const dbtCommand = defineCommand("dbt", {
-  summary: "dbt Projects on Snowflake: list, inspect, and (gated) execute, deploy, or drop",
-  description: "List, inspect, execute, deploy, and drop dbt Projects on Snowflake (server-side dbt objects)",
+  summary: "dbt Projects on Snowflake plus local dbt: compile, and (gated) run, build, test, seed, snapshot",
+  description:
+    "List, inspect, execute, deploy, and drop dbt Projects on Snowflake, and compile, run, build, test, seed, or snapshot the local dbt project in the working directory",
+  verbHints: {
+    ls: [NO_CREDS_HINT("ls")],
+    parse: [NO_CREDS_HINT("parse")],
+    deps: [NO_CREDS_HINT("deps")],
+    clean: [NO_CREDS_HINT("clean")],
+    debug: [NO_CREDS_HINT("debug")],
+    init: [NO_CREDS_HINT("init")],
+    show: [
+      UNWRAPPED_HINT,
+      "Preview built tables with `snowflake-axi sample <table>`, or compile and inspect target/compiled SQL",
+    ],
+    docs: [UNWRAPPED_HINT, "Compiled SQL lands in target/compiled after `snowflake-axi dbt compile`"],
+    retry: [
+      UNWRAPPED_HINT,
+      "Re-run `snowflake-axi dbt build` with the same --select; completed incremental work is preserved",
+    ],
+    clone: [UNWRAPPED_HINT],
+    "run-operation": [UNWRAPPED_HINT, "Arbitrary macro execution is out of scope, like arbitrary DML through `query`"],
+    source: [UNWRAPPED_HINT],
+  },
   defaultSubcommand: "list",
   subcommands: {
     list: {
@@ -344,6 +444,50 @@ export const dbtCommand = defineCommand("dbt", {
       examples: ["snowflake-axi dbt describe MY_PROJECT"],
       run: describe,
     },
+    compile: {
+      description: "Compile the local dbt project against Snowflake (read-only)",
+      flags: {
+        "--select": SELECT_FLAG,
+        "--exclude": EXCLUDE_FLAG,
+        "--target": LOCAL_TARGET_FLAG,
+        "--project-dir": PROJECT_DIR_FLAG,
+        "--timeout": localTimeoutFlag(600),
+      },
+      notes: [
+        "Local verbs (compile, run, build, test, seed, snapshot) spawn the dbt CLI on the project in the working directory, injecting the tool's credentials into an ephemeral profile; the repo's committed profiles.yml stays credential-less and only supplies targets (role, database, schema, warehouse).",
+        "Compile validates jinja and refs via dbt's introspective metadata queries; no models are materialized.",
+      ],
+      examples: ["snowflake-axi dbt compile", "snowflake-axi dbt compile --select +fct_sales --target dev"],
+      run: (args) => runLocal(args, "compile"),
+    },
+    run: localWrite("run", "Materialize models from local code, skipping their tests", {
+      fullRefresh: true,
+      notes: [
+        "Faster than build for iteration; build additionally runs each node's tests and gates downstream nodes on them.",
+      ],
+      examples: ["snowflake-axi dbt run --select my_model"],
+    }),
+    build: localWrite("build", "Run models, tests, seeds, and snapshots from local code in DAG order", {
+      fullRefresh: true,
+      notes: [
+        "Writes land where the chosen target points; a personal sandbox target keeps local iteration isolated.",
+        "For a project deployed on Snowflake, use `snowflake-axi dbt execute` instead.",
+      ],
+      examples: ["snowflake-axi dbt build --select my_model"],
+    }),
+    test: localWrite("test", "Run tests from local code", {
+      notes: [
+        "Shares the dbt.build grant: projects configured with store_failures persist failing rows to the target schema, so tests are writes too.",
+      ],
+      examples: ["snowflake-axi dbt test --select my_model"],
+    }),
+    seed: localWrite("seed", "Load CSV seed files from local code into the target", {
+      fullRefresh: true,
+      examples: ["snowflake-axi dbt seed --select my_seed"],
+    }),
+    snapshot: localWrite("snapshot", "Run snapshots from local code", {
+      examples: ["snowflake-axi dbt snapshot --select my_snapshot"],
+    }),
     execute: {
       description: "Run a dbt command inside a deployed project (write; needs the dbt.execute grant)",
       positionals: { usage: "<name | db.schema.name>", min: 1, max: 1 },

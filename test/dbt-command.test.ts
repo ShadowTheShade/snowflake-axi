@@ -4,6 +4,8 @@ const runQuery = vi.hoisted(() => vi.fn());
 vi.mock("../src/snowflake.js", () => ({ runQuery }));
 const requireGrant = vi.hoisted(() => vi.fn());
 vi.mock("../src/grants.js", () => ({ requireGrant }));
+const runLocalDbt = vi.hoisted(() => vi.fn());
+vi.mock("../src/dbt-local.js", () => ({ runLocalDbt }));
 
 import { dbtCommand } from "../src/commands/dbt.js";
 
@@ -33,6 +35,7 @@ const GIT_ROW = { ...PROJECT_ROW, default_version_source_location_uri: "@STITCH_
 beforeEach(() => {
   runQuery.mockReset();
   requireGrant.mockReset();
+  runLocalDbt.mockReset();
 });
 
 describe("dbt list", () => {
@@ -413,5 +416,52 @@ describe("dbt drop", () => {
     runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
     await expect(dbtCommand.run(["drop", "usage"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
     expect(runQuery).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("dbt local verbs", () => {
+  it("dispatches every local write verb through the dbt.build grant with parsed flags", async () => {
+    runLocalDbt.mockResolvedValue({ ok: true });
+    for (const verb of ["run", "build", "test", "seed", "snapshot"]) {
+      await dbtCommand.run([verb, "--select", "my_model", "--fail-fast"]);
+      expect(requireGrant).toHaveBeenLastCalledWith("dbt.build");
+      expect(runLocalDbt).toHaveBeenLastCalledWith(
+        expect.objectContaining({ verb, select: "my_model", failFast: true, timeoutSeconds: 1800 }),
+      );
+    }
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("compile is ungated and offers --full-refresh only where dbt accepts it", async () => {
+    runLocalDbt.mockResolvedValue({ ok: true });
+    await dbtCommand.run(["compile"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(runLocalDbt).toHaveBeenLastCalledWith(expect.objectContaining({ verb: "compile", timeoutSeconds: 600 }));
+
+    await dbtCommand.run(["seed", "--full-refresh"]);
+    expect(runLocalDbt).toHaveBeenLastCalledWith(expect.objectContaining({ verb: "seed", fullRefresh: true }));
+    await expect(dbtCommand.run(["snapshot", "--full-refresh"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringContaining("--full-refresh"),
+    });
+  });
+});
+
+describe("dbt verb hints", () => {
+  it("points credential-free verbs at the raw dbt CLI without touching Snowflake", async () => {
+    await expect(dbtCommand.run(["deps"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "'deps' is not a dbt subcommand",
+      suggestions: expect.arrayContaining([expect.stringContaining("needs no Snowflake credentials")]),
+    });
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("names the valid subcommands for unwrapped verbs", async () => {
+    await expect(dbtCommand.run(["docs", "generate"])).rejects.toMatchObject({
+      suggestions: expect.arrayContaining([
+        expect.stringContaining("Valid subcommands: list, describe, compile, run, build, test, seed, snapshot"),
+      ]),
+    });
   });
 });

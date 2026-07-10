@@ -28,6 +28,7 @@ const grouped = defineCommand("group", {
   summary: "Grouped command",
   description: "Group of verbs",
   defaultSubcommand: "list",
+  verbHints: { fetch: ["Use `group read <path>` instead"] },
   subcommands: {
     list: {
       description: "List things",
@@ -51,11 +52,12 @@ describe("defineCommand: single action", () => {
     expect(defaults).toEqual({ positionals: ["a"], limit: 10, full: false, name: undefined });
   });
 
-  it("rejects wrong arity with the usage line", async () => {
+  it("rejects wrong arity with the usage line and inlines the flag reference", async () => {
     await expect(single.run([])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     await expect(single.run(["a", "b", "c"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
       message: expect.stringContaining("at most 2"),
+      suggestions: expect.arrayContaining([expect.stringContaining("--limit <n>: max items")]),
     });
   });
 
@@ -81,6 +83,18 @@ describe("defineCommand: subcommands", () => {
 
   it("falls back to the default subcommand", async () => {
     expect(await grouped.run(["x"])).toEqual({ verb: "list", path: "x" });
+  });
+
+  it("redirects hinted verbs instead of misreading them as positionals", async () => {
+    await expect(grouped.run(["fetch", "x"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "'fetch' is not a group subcommand",
+      suggestions: ["Use `group read <path>` instead", "Valid subcommands: list, read"],
+    });
+    // The hint wins even when flags of some other subcommand would fail first.
+    await expect(grouped.run(["fetch", "--full"])).rejects.toMatchObject({
+      message: "'fetch' is not a group subcommand",
+    });
   });
 
   it("validates flags per subcommand", async () => {

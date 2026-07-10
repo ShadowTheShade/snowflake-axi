@@ -15,6 +15,7 @@ export interface Config {
   schema?: string;
   modelDirs: string[];
   defaultFileFormat?: string;
+  dbtTarget?: string;
 }
 
 export function configDir(): string {
@@ -140,6 +141,7 @@ export function loadConfig(): Config {
     schema: get("SNOWFLAKE_SCHEMA"),
     modelDirs: (get("SNOWFLAKE_AXI_MODEL_DIRS") ?? "").split(":").filter(Boolean).map(expandHome),
     defaultFileFormat: get("SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT"),
+    dbtTarget: get("SNOWFLAKE_AXI_DBT_TARGET"),
   };
   return cached;
 }

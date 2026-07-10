@@ -51,6 +51,12 @@ export interface CommandDef {
   subcommands?: Record<string, ActionDef>;
   /** Subcommand used when the first argument is not a subcommand name. */
   defaultSubcommand?: string;
+  /**
+   * Known-but-unsupported verbs and their redirects. Matching first arguments
+   * fail loud with the given suggestions instead of falling through to the
+   * default subcommand, where they would be misread as positionals.
+   */
+  verbHints?: Record<string, string[]>;
 }
 
 function flagUsage(name: string, def: FlagDef): string {
@@ -80,7 +86,11 @@ function checkArity(displayName: string, action: ActionDef, count: number): void
         : count < bounds.min
           ? `${displayName} takes at least ${bounds.min} argument(s): ${bounds.usage}`
           : `${displayName} takes at most ${bounds.max} argument(s): ${bounds.usage}`;
-  throw new AxiError(message, "VALIDATION_ERROR", [`Run \`${usageLine(displayName, action)}\``]);
+  // Stray positionals are usually flag values gone astray (an unquoted value
+  // with spaces, a missing flag name), so inline the flag reference to make
+  // the error self-correcting in one turn, like unknown-flag errors.
+  const flagLines = Object.entries(action.flags ?? {}).map(([flagName, def]) => flagLine(flagName, def));
+  throw new AxiError(message, "VALIDATION_ERROR", [`Run \`${usageLine(displayName, action)}\``, ...flagLines]);
 }
 
 function parseActionArgs(displayName: string, action: ActionDef, argv: string[]): CommandArgs {
@@ -118,6 +128,12 @@ function resolveAction(name: string, def: CommandDef, argv: string[]): ResolvedA
   const verb = argv[0];
   if (verb !== undefined && Object.hasOwn(subs, verb)) {
     return { displayName: `${name} ${verb}`, action: subs[verb], rest: argv.slice(1) };
+  }
+  if (verb !== undefined && def.verbHints && Object.hasOwn(def.verbHints, verb)) {
+    throw new AxiError(`'${verb}' is not a ${name} subcommand`, "VALIDATION_ERROR", [
+      ...def.verbHints[verb],
+      `Valid subcommands: ${Object.keys(subs).join(", ")}`,
+    ]);
   }
   const fallback = def.defaultSubcommand === undefined ? undefined : subs[def.defaultSubcommand];
   if (!fallback) {

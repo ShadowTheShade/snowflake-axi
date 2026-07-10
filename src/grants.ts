@@ -11,6 +11,10 @@ import { configDir } from "./config.js";
  * hard limit on what the token can do.
  */
 export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: string }> = {
+  "dbt.build": {
+    description: "Run local dbt writes against Snowflake: run, build, test, seed, snapshot (spawns the local dbt CLI)",
+    unlocks: "snowflake-axi dbt build --select <model>",
+  },
   "dbt.execute": {
     description: "Run a deployed dbt project on Snowflake (EXECUTE DBT PROJECT)",
     unlocks: 'snowflake-axi dbt execute <name> --args "build"',

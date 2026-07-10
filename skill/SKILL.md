@@ -4,10 +4,10 @@ description: >
   Read-only Snowflake access via the snowflake-axi CLI - list tables with row counts,
   search objects account-wide, inspect schemas, sample rows, run SELECT queries,
   discover semantic views with verified queries, check warehouse credit burn, read
-  dbt model SQL, browse git repositories on Snowflake, and peek staged parquet files.
-  Use for ANY Snowflake read or discovery task instead of an MCP tool or hand-rolled
-  connector. Writes (dbt execute/deploy/drop, git fetch) exist but stay locked until
-  the user grants them.
+  dbt model SQL, compile local dbt repos, browse git repositories on Snowflake, and
+  peek staged parquet files. Use for ANY Snowflake read or discovery task instead of
+  an MCP tool or hand-rolled connector. Writes (local dbt run/build/test/seed/snapshot,
+  dbt execute/deploy/drop, git fetch) exist but stay locked until the user grants them.
 user-invocable: false
 ---
 
@@ -35,6 +35,11 @@ snowflake-axi warehouses                    # states + 7-day credit burn + usage
 snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
 snowflake-axi dbt describe MY_PROJECT       # versions, source, target, integrations
+snowflake-axi dbt compile                   # compile the local dbt repo (cwd) against Snowflake
+snowflake-axi dbt run --select my_model     # write: materialize local models (no tests), locked until granted
+snowflake-axi dbt build --select my_model   # write: models + tests + seeds + snapshots, locked until granted
+snowflake-axi dbt seed                      # write: load local CSV seeds, locked until granted
+snowflake-axi dbt snapshot                  # write: run local snapshots, locked until granted
 snowflake-axi dbt execute MY_PROJECT --args "build"   # write: locked until the user grants it
 snowflake-axi dbt deploy MY_PROJECT --branch main     # write: create or version a project from git, locked until granted
 snowflake-axi dbt drop MY_DB.MY_SCHEMA.MY_PROJECT     # write: drop a project and all versions, locked until granted
@@ -57,6 +62,14 @@ snowflake-axi hooks                         # session-start hook status; install
   the team's routing rules, metric definitions, and human-verified queries.
 - `model` finds dbt models in projects around the working directory; run it from
   inside the dbt repo.
+- `dbt compile/run/build/test/seed/snapshot` run the local dbt CLI on the repo in the
+  working directory, injecting the tool's credentials into the repo's credential-less
+  profiles.yml targets; pick the target with `--target` (a missing target fails loud
+  and lists them). The write verbs all share the one dbt.build grant.
+- `--select` takes dbt selector syntax: `+model_x` pulls ancestors, `model_x+` pulls
+  descendants, and a union must be quoted into ONE value
+  (`--select "model_x+ model_y+"`), never passed as extra arguments.
+  Omit `--select` to run the whole project; `run` skips tests, `build` includes them.
 - `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.

@@ -21,6 +21,9 @@ snowflake-axi semantics       # semantic views: the curated map of tables, metri
 snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
+snowflake-axi dbt compile     # compile the local dbt repo with the tool's credentials
+snowflake-axi dbt run --select my_model             # materialize local models into the chosen target (write, gated)
+snowflake-axi dbt build --select my_model           # models + tests + seeds + snapshots in DAG order (write, gated)
 snowflake-axi dbt deploy MY_PROJECT --branch main   # cut a new project version from git (write, gated)
 snowflake-axi git             # git repositories on Snowflake, account-wide
 snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO  # branches with commit hashes
@@ -71,6 +74,7 @@ SNOWFLAKE_DATABASE=<default database>
 SNOWFLAKE_SCHEMA=<default schema>
 SNOWFLAKE_AXI_MODEL_DIRS=<colon-separated dbt model dirs, used instead of discovery>
 SNOWFLAKE_AXI_DEFAULT_FILE_FORMAT=<named file format, for the stage command>
+SNOWFLAKE_AXI_DBT_TARGET=<default target for local dbt compile/build/test>
 ```
 
 The warehouse is never configured: statements run on the user's `DEFAULT_WAREHOUSE`, `query --warehouse <name>` switches one statement, and dbt executions use the warehouse pinned in the project's own profiles.
@@ -92,7 +96,7 @@ Two independent layers keep everyday use read-only:
 
 Write statements through `query` are rejected with the SQL echoed back so an operator can run it manually; arbitrary DML/DDL is permanently out of scope.
 
-Specific write commands exist (currently `dbt execute` and `dbt deploy`) but are disabled until the user opts in, MCP-style:
+Specific write commands exist (the local `dbt run`/`build`/`test`/`seed`/`snapshot`, plus `dbt execute`, `dbt deploy`, `dbt drop`, `git fetch`) but are disabled until the user opts in, MCP-style:
 
 - Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user in conversation.
 - Once the user agrees, the agent runs `snowflake-axi allow <capability> --agent`; the harness permission prompt for that command is the user's confirmation click.
@@ -116,6 +120,8 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
+| `dbt compile` | Compile the local dbt project against Snowflake (read-only); `--select`, `--exclude`, `--target`, `--project-dir` |
+| `dbt run` / `build` / `test` / `seed` / `snapshot` | The local dbt write verbs, 1:1 with dbt's own; all need the `dbt.build` grant; `--select`, `--full-refresh`, `--fail-fast` |
 | `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant; `--role` when the default role cannot execute it |
 | `dbt deploy <name>` | Create a project or cut a new version from its git repository (FETCH + CREATE / ADD VERSION, no upload); write, needs the `dbt.deploy` grant; `--branch`, `--repo`, `--path`, `--target`, `--integrations`, `--role` |
 | `dbt drop <name>` | Drop a dbt project and all its versions (idempotent); write, needs the `dbt.drop` grant; `--role` |
@@ -130,6 +136,22 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 
 Structured commands accept unquoted identifiers only.
 A table created with a quoted lowercase or special-character name (such as `"my table"`) is reachable through `query`, which passes SQL through verbatim, but not through `tables`, `schema`, or `sample`.
+
+## Local dbt
+
+`dbt compile` and the write verbs `run`, `build`, `test`, `seed`, and `snapshot` spawn the local dbt CLI on the project in the working directory (or `--project-dir`), so agents can iterate on model code before it is committed or deployed anywhere.
+The verbs mirror dbt's own 1:1, so "run my_model" means exactly what it means in dbt; `run` materializes without tests, `build` adds each node's tests and gates downstream nodes on them.
+
+They are built for the dbt Projects on Snowflake layout, where the repo commits a credential-less `profiles.yml` (empty `account`/`user`) because the server-side session injects identity.
+Locally, snowflake-axi plays that same role: it reads the repo's targets (role, database, schema, warehouse), replaces every auth field with its own credentials in an ephemeral profile directory handed to the dbt subprocess, and deletes it after the run.
+The token itself never touches disk - the generated profile references an env var that only the dbt subprocess receives.
+No `~/.dbt/profiles.yml` or `DBT_PROFILES_DIR` is needed, and existing ones are ignored.
+
+The target comes from `--target`, falling back to `SNOWFLAKE_AXI_DBT_TARGET` from the config; with neither set the command fails loud and lists the repo's targets.
+Pointing the default at a personal sandbox target keeps agent iteration isolated from shared schemas.
+
+dbt's own log streams to stderr for humans; stdout carries a compact per-node summary parsed from `run_results.json`, and node failures become a structured `DBT_ERROR` listing each failing node.
+The dbt CLI must be installed separately, for example as a uv tool: dbt-core with the dbt-snowflake adapter alongside.
 
 ## Agent integration
 
