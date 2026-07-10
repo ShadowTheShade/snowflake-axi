@@ -1,6 +1,6 @@
 import { AxiError } from "axi-sdk-js";
 import { describe, expect, it } from "vitest";
-import { assertReadOnly } from "../src/validate.js";
+import { assertPgReadOnly, assertReadOnly } from "../src/validate.js";
 
 function codeOf(fn: () => unknown): string {
   try {
@@ -69,5 +69,69 @@ describe("assertReadOnly", () => {
   it("rejects empty input", () => {
     expect(codeOf(() => assertReadOnly(""))).toBe("VALIDATION_ERROR");
     expect(codeOf(() => assertReadOnly("  -- just a comment"))).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("assertPgReadOnly", () => {
+  it.each([
+    ["SELECT 1", "SELECT"],
+    ["WITH x AS (SELECT 1) SELECT * FROM x", "WITH"],
+    ["TABLE orders", "TABLE"],
+    ["VALUES (1), (2)", "VALUES"],
+    ["SHOW server_version", "SHOW"],
+    ["EXPLAIN SELECT 1", "EXPLAIN"],
+  ])("accepts %s", (sql, head) => {
+    expect(assertPgReadOnly(sql).head).toBe(head);
+  });
+
+  it.each([
+    "UPDATE t SET a = 1",
+    "DELETE FROM t",
+    "INSERT INTO t VALUES (1)",
+    "CREATE TABLE t (a INT)",
+    "DROP TABLE t",
+    "TRUNCATE t",
+    "COPY t FROM stdin",
+    "SET default_transaction_read_only = off",
+    "VACUUM t",
+    "CALL my_proc()",
+    "DESC t",
+  ])("rejects %s with READ_ONLY", (sql) => {
+    expect(codeOf(() => assertPgReadOnly(sql))).toBe("READ_ONLY");
+  });
+
+  it("does not treat // as a comment (Postgres has none)", () => {
+    // In the Snowflake dialect the // comment would swallow the semicolon.
+    expect(assertReadOnly("SELECT a // hide; DROP TABLE t").head).toBe("SELECT");
+    expect(codeOf(() => assertPgReadOnly("SELECT a // hide; DROP TABLE t"))).toBe("VALIDATION_ERROR");
+  });
+
+  it("tracks tagged dollar quotes", () => {
+    expect(assertPgReadOnly("SELECT $tag$ ; DROP TABLE t $tag$").head).toBe("SELECT");
+    expect(assertPgReadOnly("SELECT $$ ; still one statement $$").head).toBe("SELECT");
+  });
+
+  it("accepts EXPLAIN around read statements in every option spelling", () => {
+    expect(assertPgReadOnly("EXPLAIN SELECT 1").head).toBe("EXPLAIN");
+    expect(assertPgReadOnly("EXPLAIN ANALYZE VERBOSE SELECT 1").head).toBe("EXPLAIN");
+    expect(assertPgReadOnly("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) WITH x AS (SELECT 1) SELECT * FROM x").head).toBe(
+      "EXPLAIN",
+    );
+    expect(assertPgReadOnly("EXPLAIN (FORMAT TEXT) TABLE users").head).toBe("EXPLAIN");
+  });
+
+  it.each([
+    "EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1",
+    "EXPLAIN (ANALYZE) CREATE MATERIALIZED VIEW mv AS SELECT 1",
+    "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t",
+    "EXPLAIN VERBOSE INSERT INTO t VALUES (1)",
+    "EXPLAIN ANALYZE EXECUTE plan(1)",
+    "EXPLAIN",
+  ])("rejects %s: EXPLAIN may only wrap a read statement", (sql) => {
+    expect(codeOf(() => assertPgReadOnly(sql))).toBe("READ_ONLY");
+  });
+
+  it("rejects multiple statements", () => {
+    expect(codeOf(() => assertPgReadOnly("SELECT 1; SELECT 2"))).toBe("VALIDATION_ERROR");
   });
 });

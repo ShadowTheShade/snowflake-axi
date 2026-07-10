@@ -1,5 +1,14 @@
 import { defineCommand } from "../command.js";
-import { loadConfig } from "../config.js";
+import { loadConfig, loadPgConfig } from "../config.js";
+
+function pgLine(): string | undefined {
+  try {
+    const pg = loadPgConfig();
+    return `${pg.database} @ ${pg.host} (read-only; \`snowflake-axi pg\`)`;
+  } catch {
+    return undefined;
+  }
+}
 
 export const contextCommand = defineCommand("context", {
   summary: "Compact config-derived context line for session-start hooks",
@@ -14,10 +23,12 @@ export const contextCommand = defineCommand("context", {
         // nagging every session with a setup error.
         return "";
       }
+      const pg = pgLine();
       return {
         tool: "snowflake-axi: read-only Snowflake explorer on PATH",
         account: config.account,
         user: config.user,
+        ...(pg !== undefined ? { pg } : {}),
         help: ["Run `snowflake-axi` for live connection context and readable databases"],
       };
     },

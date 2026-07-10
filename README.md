@@ -28,6 +28,10 @@ snowflake-axi dbt deploy MY_PROJECT --branch main   # cut a new project version 
 snowflake-axi git             # git repositories on Snowflake, account-wide
 snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO  # branches with commit hashes
 snowflake-axi stage @DB.SCHEMA.STAGE
+snowflake-axi pg              # Snowflake Postgres: every schema's tables, largest first
+snowflake-axi pg schema orders              # columns, types, defaults, primary key
+snowflake-axi pg sample orders --limit 3
+snowflake-axi pg query "SELECT count(*) FROM orders"
 snowflake-axi allow           # write capabilities and their grant status
 snowflake-axi hooks           # session-start hook status; see Agent integration
 snowflake-axi <command> --help
@@ -95,6 +99,7 @@ Two independent layers keep everyday use read-only:
 2. `query` validates SQL before any connection is made: single statement only, head keyword must be SELECT, WITH, SHOW, DESC, DESCRIBE, or EXPLAIN.
 
 Write statements through `query` are rejected with the SQL echoed back so an operator can run it manually; arbitrary DML/DDL is permanently out of scope.
+`pg query` applies the same statement validation, and every Postgres session is additionally opened read-only at the server, so nothing can write through it (see Snowflake Postgres below).
 
 Specific write commands exist (the local `dbt run`/`build`/`test`/`seed`/`snapshot`, plus `dbt execute`, `dbt deploy`, `dbt drop`, `git fetch`) but are disabled until the user opts in, MCP-style:
 
@@ -129,6 +134,10 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `git branches <repo>` | Branches in a repository with commit hashes; `--like`, `--limit` |
 | `git fetch <repo>` | Refresh a repository from its origin (FETCH); write, needs the `git.fetch` grant; `--role` |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
+| `pg [tables [schema]]` | Snowflake Postgres tables largest first with estimated rows and size; `--like`, `--views`, `--limit` |
+| `pg schema <table>` | Columns with types, nullability, and defaults, plus primary key and size; names resolve case-insensitively |
+| `pg sample <table>` | Preview Postgres rows; `--fields`, `--where`, `--limit`, `--full` |
+| `pg query <sql>` | One read-only Postgres statement; definitive completeness reporting, `--limit`, `--full`, `--timeout` |
 | `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
 | `context` | One-line config-derived orientation for session hooks; no connection, silent when unconfigured |
 | `hooks` | SessionStart hook status; `install` registers it for Claude Code, Codex, and OpenCode, `remove` withdraws it |
@@ -152,6 +161,31 @@ Pointing the default at a personal sandbox target keeps agent iteration isolated
 
 dbt's own log streams to stderr for humans; stdout carries a compact per-node summary parsed from `run_results.json`, and node failures become a structured `DBT_ERROR` listing each failing node.
 The dbt CLI must be installed separately, for example as a uv tool: dbt-core with the dbt-snowflake adapter alongside.
+
+## Snowflake Postgres
+
+The `pg` command group explores a Snowflake Postgres database over a direct wire connection, mirroring the Snowflake surface verb for verb: `pg tables`, `pg schema`, `pg sample`, `pg query`.
+Bare `pg` lists every user schema's tables largest first with a connection header, so one call orients an agent completely.
+
+The connection is configured with its own keys in the same env file, deliberately separate from any ambient `PGHOST`-style variables so shell state from unrelated work can never retarget the tool:
+
+```
+SNOWFLAKE_AXI_PG_HOST=<instance endpoint>
+SNOWFLAKE_AXI_PG_USER=<postgres role>
+SNOWFLAKE_AXI_PG_PASSWORD=<password>
+SNOWFLAKE_AXI_PG_PORT=<optional, default 5432>
+SNOWFLAKE_AXI_PG_DATABASE=<optional, default postgres>
+SNOWFLAKE_AXI_PG_SSLMODE=<optional: disable, require (default), verify-full>
+```
+
+The surface is read-only end to end, with three independent layers:
+
+1. `pg query` validates the statement before connecting: single statement, head keyword must be SELECT, WITH, TABLE, VALUES, SHOW, or EXPLAIN - and EXPLAIN itself may only wrap SELECT, WITH, TABLE, or VALUES, because `EXPLAIN ANALYZE` executes what it plans and its CREATE TABLE AS form slips past even a read-only transaction (verified live).
+2. Every session opens with `default_transaction_read_only=on` in the startup packet, so DML smuggled past the head check (for example inside a data-modifying CTE) is rejected by the server.
+3. Statements run through the extended protocol, which makes multi-statement SQL a server-side error as well.
+
+Row counts in `pg tables` and `pg schema` are planner estimates (`reltuples`); a blank means the table was never analyzed.
+`pg query` streams through a cursor and probes one row past `--limit`, so it reports either an exact `N (complete)` or an honest `first N rows (more exist)` without ever buffering an unbounded result.
 
 ## Agent integration
 

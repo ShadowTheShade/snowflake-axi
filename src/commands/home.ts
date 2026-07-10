@@ -1,5 +1,14 @@
-import { loadConfig } from "../config.js";
+import { loadConfig, loadPgConfig } from "../config.js";
 import { runQuery } from "../snowflake.js";
+
+function pgConfigured(): boolean {
+  try {
+    loadPgConfig();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // The home view is the highest-traffic surface, so the database list is
 // capped; the full list stays one suggested command away. `tables` cannot be
@@ -38,6 +47,7 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
       'Run `snowflake-axi query "SELECT ..."` to run read-only SQL',
       "Run `snowflake-axi semantics` for the curated map of metrics and verified queries",
       "Run `snowflake-axi find <pattern>` to search tables and views by name account-wide",
+      ...(pgConfigured() ? ["Run `snowflake-axi pg` for the Snowflake Postgres side (read-only)"] : []),
       ...pluginHelp,
     ],
   };

@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../src/config.js";
+import { loadConfig, loadPgConfig } from "../src/config.js";
 import { cli } from "./harness.js";
 
 /**
@@ -16,6 +16,14 @@ try {
   hasCreds = true;
 } catch {
   // No credentials configured; live tests are skipped.
+}
+
+let hasPg = false;
+try {
+  loadPgConfig();
+  hasPg = true;
+} catch {
+  // No Snowflake Postgres connection configured; live pg tests are skipped.
 }
 
 describe("offline behaviors (no credentials required)", () => {
@@ -76,6 +84,39 @@ describe("offline behaviors (no credentials required)", () => {
     expect(code).toBe(0);
     expect(stdout).toContain("dbt.execute");
     expect(stdout).toContain("false");
+  });
+
+  it("pg write SQL is rejected with READ_ONLY before any connection", async () => {
+    const { stdout, code } = await cli(["pg", "query", "DELETE FROM anything"]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("READ_ONLY");
+  });
+
+  it("pg write verbs are redirected with exit 2, before any connection", async () => {
+    const { stdout, code } = await cli(["pg", "insert", "into", "t"]);
+    expect(code).toBe(2);
+    expect(stdout).toContain("read-only");
+  });
+
+  it("pg EXPLAIN ANALYZE around a write is rejected before any connection", async () => {
+    // EXPLAIN ANALYZE executes what it plans, and the CREATE TABLE AS form
+    // slips past the server's read-only-transaction check, so the client
+    // validator must catch it.
+    const { stdout, code } = await cli(["pg", "query", "EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1"]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("READ_ONLY");
+  });
+
+  it("pg without connection settings fails with the keys to add", async () => {
+    const { stdout, code } = await cli(["pg"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+      SNOWFLAKE_AXI_PG_HOST: "",
+      SNOWFLAKE_AXI_PG_USER: "",
+      SNOWFLAKE_AXI_PG_PASSWORD: "",
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("CONFIG_ERROR");
+    expect(stdout).toContain("SNOWFLAKE_AXI_PG_HOST");
   });
 });
 
@@ -219,5 +260,38 @@ describe.skipIf(!hasCreds)("live account (any Snowflake account)", () => {
     const { stdout, code } = await cli(["query", "SELECT 1"], { SNOWFLAKE_TOKEN: "not-a-real-token" });
     expect(code).toBe(1);
     expect(stdout).toContain("AUTH_ERROR");
+  });
+});
+
+describe.skipIf(!hasPg)("live Snowflake Postgres (requires SNOWFLAKE_AXI_PG_* settings)", () => {
+  it("bare pg lists tables with a read-only connection header", async () => {
+    const { stdout, code } = await cli(["pg"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("connection:");
+    expect(stdout).toContain("(read-only)");
+  });
+
+  it("pg query reports definitive complete counts", async () => {
+    const { stdout, code } = await cli(["pg", "query", "SELECT 1 AS n"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("count: 1 (complete)");
+  });
+
+  it("pg query reports incomplete results honestly", async () => {
+    const { stdout, code } = await cli(["pg", "query", "SELECT relname FROM pg_class", "--limit", "3"]);
+    expect(code).toBe(0);
+    expect(stdout).toContain("first 3 rows (more exist)");
+  });
+
+  it("the session really runs read-only at the server", async () => {
+    const { stdout, code } = await cli(["pg", "query", "SELECT current_setting('transaction_read_only') AS ro"]);
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/\bon\b/);
+  });
+
+  it("statement timeouts translate to a TIMEOUT error", async () => {
+    const { stdout, code } = await cli(["pg", "query", "SELECT pg_sleep(5)", "--timeout", "1"]);
+    expect(code).toBe(1);
+    expect(stdout).toContain("TIMEOUT");
   });
 });

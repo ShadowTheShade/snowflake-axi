@@ -4,9 +4,10 @@ description: >
   Read-only Snowflake access via the snowflake-axi CLI - list tables with row counts,
   search objects account-wide, inspect schemas, sample rows, run SELECT queries,
   discover semantic views with verified queries, check warehouse credit burn, read
-  dbt model SQL, compile local dbt repos, browse git repositories on Snowflake, and
-  peek staged parquet files. Use for ANY Snowflake read or discovery task instead of
-  an MCP tool or hand-rolled connector. Writes (local dbt run/build/test/seed/snapshot,
+  dbt model SQL, compile local dbt repos, browse git repositories on Snowflake,
+  peek staged parquet files, and explore Snowflake Postgres (pg tables/schema/sample/query,
+  read-only). Use for ANY Snowflake or Snowflake Postgres read or discovery task instead
+  of an MCP tool or hand-rolled connector. Writes (local dbt run/build/test/seed/snapshot,
   dbt execute/deploy/drop, git fetch) exist but stay locked until the user grants them.
 user-invocable: false
 ---
@@ -48,6 +49,11 @@ snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO    # branches with commit has
 snowflake-axi git fetch MY_DB.MY_SCHEMA.MY_REPO       # write: refresh from origin, locked until granted
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
+snowflake-axi pg                            # Snowflake Postgres: every schema's tables, largest first
+snowflake-axi pg tables public --like orders
+snowflake-axi pg schema orders              # columns, types, defaults, primary key
+snowflake-axi pg sample orders --limit 3 --fields id,status
+snowflake-axi pg query "SELECT count(*) FROM orders"   # read-only, server-enforced
 snowflake-axi allow                         # write capabilities and their grant status
 snowflake-axi context                       # one-line config-derived context (what session hooks print)
 snowflake-axi hooks                         # session-start hook status; install/remove via subcommands
@@ -72,6 +78,10 @@ snowflake-axi hooks                         # session-start hook status; install
   Omit `--select` to run the whole project; `run` skips tests, `build` includes them.
 - `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.
   Write SQL is rejected; hand it to the operator as paste-ready SQL instead.
+- `pg` speaks to Snowflake Postgres directly (SNOWFLAKE_AXI_PG_* keys) and is read-only
+  end to end: `pg query` allows SELECT / WITH / TABLE / VALUES / SHOW / EXPLAIN and the
+  session itself runs read-only at the server. Table names resolve case-insensitively as
+  `table` or `schema.table`; row counts there are planner estimates.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
 - A query that runs long prints a statement handle to stderr;
   `snowflake-axi result <handle>` collects its output later without re-running it.

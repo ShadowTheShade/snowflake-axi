@@ -86,6 +86,63 @@ describe("loadConfig", () => {
   });
 });
 
+describe("loadPgConfig", () => {
+  async function freshLoadPgConfig() {
+    vi.resetModules();
+    const { loadPgConfig } = await import("../src/config.js");
+    return loadPgConfig;
+  }
+
+  function stubPg() {
+    stubIsolation();
+    vi.stubEnv("SNOWFLAKE_AXI_PG_HOST", "pg.example.com");
+    vi.stubEnv("SNOWFLAKE_AXI_PG_USER", "svc");
+    vi.stubEnv("SNOWFLAKE_AXI_PG_PASSWORD", "pw");
+  }
+
+  it("reports missing keys with CONFIG_ERROR, independent of Snowflake credentials", async () => {
+    stubIsolation();
+    const loadPgConfig = await freshLoadPgConfig();
+    expect(loadError(loadPgConfig)).toMatchObject({
+      code: "CONFIG_ERROR",
+      message: expect.stringContaining("SNOWFLAKE_AXI_PG_HOST, SNOWFLAKE_AXI_PG_USER, SNOWFLAKE_AXI_PG_PASSWORD"),
+    });
+  });
+
+  it("applies port, database, and sslmode defaults", async () => {
+    stubPg();
+    const loadPgConfig = await freshLoadPgConfig();
+    expect(loadPgConfig()).toEqual({
+      host: "pg.example.com",
+      port: 5432,
+      database: "postgres",
+      user: "svc",
+      password: "pw",
+      sslmode: "require",
+    });
+  });
+
+  it("rejects an invalid port", async () => {
+    stubPg();
+    vi.stubEnv("SNOWFLAKE_AXI_PG_PORT", "not-a-port");
+    const loadPgConfig = await freshLoadPgConfig();
+    expect(loadError(loadPgConfig)).toMatchObject({
+      code: "CONFIG_ERROR",
+      message: expect.stringContaining("SNOWFLAKE_AXI_PG_PORT"),
+    });
+  });
+
+  it("rejects an unknown sslmode", async () => {
+    stubPg();
+    vi.stubEnv("SNOWFLAKE_AXI_PG_SSLMODE", "prefer");
+    const loadPgConfig = await freshLoadPgConfig();
+    expect(loadError(loadPgConfig)).toMatchObject({
+      code: "CONFIG_ERROR",
+      message: expect.stringContaining("SNOWFLAKE_AXI_PG_SSLMODE"),
+    });
+  });
+});
+
 describe("snow CLI connections.toml fallback", () => {
   it("uses a PAT connection from connections.toml when nothing else is configured", async () => {
     stubSnowflakeHome({

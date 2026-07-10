@@ -42,12 +42,16 @@
   },
   "dependencies": {
     "axi-sdk-js": "^0.1.8",
+    "pg": "^8.22.0",
+    "pg-cursor": "^2.21.0",
     "smol-toml": "^1.7.0",
     "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.2",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.20.0",
+    "@types/pg-cursor": "^2.7.2",
     "typescript": "^5.5.0",
     "vitest": "^3.0.0"
   }

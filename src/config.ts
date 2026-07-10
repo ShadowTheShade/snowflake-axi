@@ -100,6 +100,68 @@ function snowCliConnection(): Record<string, string> {
   );
 }
 
+export interface PgConfig {
+  host: string;
+  port: number;
+  database: string;
+  user: string;
+  password: string;
+  sslmode: "disable" | "require" | "verify-full";
+}
+
+const PG_SSLMODES = new Set(["disable", "require", "verify-full"]);
+
+let cachedPg: PgConfig | undefined;
+
+/**
+ * Snowflake Postgres connection settings, independent of the Snowflake
+ * credentials: `pg` commands work even when the SQL API side is not set up.
+ * Keys are prefixed rather than the ambient PGHOST family so that shell
+ * variables from unrelated work can never silently retarget the tool.
+ */
+export function loadPgConfig(): PgConfig {
+  if (cachedPg) return cachedPg;
+  const file = parseEnvFile(envFilePath());
+  const get = (key: string) => process.env[key] || file[key] || undefined;
+  const host = get("SNOWFLAKE_AXI_PG_HOST");
+  const user = get("SNOWFLAKE_AXI_PG_USER");
+  const password = get("SNOWFLAKE_AXI_PG_PASSWORD");
+  if (!host || !user || !password) {
+    const missing = [
+      ["SNOWFLAKE_AXI_PG_HOST", host],
+      ["SNOWFLAKE_AXI_PG_USER", user],
+      ["SNOWFLAKE_AXI_PG_PASSWORD", password],
+    ]
+      .filter(([, value]) => !value)
+      .map(([key]) => key);
+    throw new AxiError(`Missing Snowflake Postgres connection settings: ${missing.join(", ")}`, "CONFIG_ERROR", [
+      `Add SNOWFLAKE_AXI_PG_HOST, SNOWFLAKE_AXI_PG_USER, SNOWFLAKE_AXI_PG_PASSWORD to ${envFilePath()}`,
+      "Optional keys: SNOWFLAKE_AXI_PG_PORT (5432), SNOWFLAKE_AXI_PG_DATABASE (postgres), SNOWFLAKE_AXI_PG_SSLMODE (require)",
+    ]);
+  }
+  const port = Number(get("SNOWFLAKE_AXI_PG_PORT") ?? "5432");
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new AxiError(`Invalid SNOWFLAKE_AXI_PG_PORT '${get("SNOWFLAKE_AXI_PG_PORT")}'`, "CONFIG_ERROR", [
+      `Fix SNOWFLAKE_AXI_PG_PORT in ${envFilePath()} (1-65535)`,
+    ]);
+  }
+  const sslmode = get("SNOWFLAKE_AXI_PG_SSLMODE") ?? "require";
+  if (!PG_SSLMODES.has(sslmode)) {
+    throw new AxiError(`Invalid SNOWFLAKE_AXI_PG_SSLMODE '${sslmode}'`, "CONFIG_ERROR", [
+      `Fix SNOWFLAKE_AXI_PG_SSLMODE in ${envFilePath()}: disable, require, or verify-full`,
+    ]);
+  }
+  cachedPg = {
+    host,
+    port,
+    database: get("SNOWFLAKE_AXI_PG_DATABASE") ?? "postgres",
+    user,
+    password,
+    sslmode: sslmode as PgConfig["sslmode"],
+  };
+  return cachedPg;
+}
+
 let cached: Config | undefined;
 
 export function loadConfig(): Config {
