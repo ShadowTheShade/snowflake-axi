@@ -1,4 +1,11 @@
+import { homedir } from "node:os";
+
 const UNITS = ["B", "KB", "MB", "GB", "TB", "PB"];
+
+export function collapseHome(path: string): string {
+  const home = homedir();
+  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
+}
 
 export function humanBytes(bytes: number | null | undefined): string {
   if (bytes === null || bytes === undefined || Number.isNaN(bytes)) return "";

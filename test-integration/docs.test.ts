@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { WRITE_CAPABILITIES } from "../src/grants.js";
 import { CORE_COMMANDS } from "../src/index.js";
 import { cli } from "./harness.js";
 
@@ -89,6 +90,14 @@ describe("doc coverage (drift guard)", () => {
   it("SKILL.md exercises every core command", () => {
     for (const name of Object.keys(CORE_COMMANDS)) {
       expect(SKILL, `SKILL.md lacks an example for '${name}'`).toContain(`snowflake-axi ${name}`);
+    }
+  });
+
+  it("the skill frontmatter names every gated write capability", () => {
+    const frontmatter = SKILL.match(/^---\n([\s\S]*?)\n---/)?.[1] ?? "";
+    for (const capability of Object.keys(WRITE_CAPABILITIES)) {
+      const verb = capability.split(".")[1];
+      expect(frontmatter, `skill frontmatter omits the '${capability}' write`).toContain(verb);
     }
   });
 

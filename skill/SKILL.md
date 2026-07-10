@@ -2,10 +2,12 @@
 name: snowflake-axi
 description: >
   Read-only Snowflake access via the snowflake-axi CLI - list tables with row counts,
-  inspect schemas, sample rows, run SELECT queries, check warehouse credit burn, read
-  dbt model SQL, and peek staged parquet files. Use for ANY Snowflake read or discovery
-  task instead of an MCP tool or hand-rolled connector. Writes (dbt execute) exist but
-  stay locked until the user grants them.
+  search objects account-wide, inspect schemas, sample rows, run SELECT queries,
+  discover semantic views with verified queries, check warehouse credit burn, read
+  dbt model SQL, browse git repositories on Snowflake, and peek staged parquet files.
+  Use for ANY Snowflake read or discovery task instead of an MCP tool or hand-rolled
+  connector. Writes (dbt execute/deploy/drop, git fetch) exist but stay locked until
+  the user grants them.
 user-invocable: false
 ---
 
@@ -42,11 +44,15 @@ snowflake-axi git fetch MY_DB.MY_SCHEMA.MY_REPO       # write: refresh from orig
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
 snowflake-axi allow                         # write capabilities and their grant status
+snowflake-axi context                       # one-line config-derived context (what session hooks print)
+snowflake-axi hooks                         # session-start hook status; install/remove via subcommands
 ```
 
 - Unqualified table names resolve against the Snowflake user's default namespace;
   if the user has none, qualify names fully (`DB.SCHEMA.TABLE`) - `tables` with no
   arguments then lists readable databases to drill into.
+- Structured commands take unquoted identifiers; a quoted lowercase or
+  special-character name (`"my table"`) is only reachable through `query`.
 - Before hand-writing SQL for metrics or KPIs, check `semantics`: semantic views carry
   the team's routing rules, metric definitions, and human-verified queries.
 - `model` finds dbt models in projects around the working directory; run it from

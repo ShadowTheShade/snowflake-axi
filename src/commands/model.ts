@@ -4,6 +4,7 @@ import { basename, dirname, join } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
+import { collapseHome } from "../format.js";
 
 const SQL_LIMIT = 1500;
 const DISCOVERY_DEPTH = 3;
@@ -12,11 +13,6 @@ const SKIPPED_DIRS = new Set(["node_modules", "target", "dbt_packages", "venv", 
 interface ModelFile {
   name: string;
   path: string;
-}
-
-function collapseHome(path: string): string {
-  const home = homedir();
-  return path.startsWith(home) ? `~${path.slice(home.length)}` : path;
 }
 
 // dbt_project.yml is YAML, but model-paths is virtually always either the

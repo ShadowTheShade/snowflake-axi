@@ -21,7 +21,8 @@
   ],
   "type": "module",
   "bin": {
-    "snowflake-axi": "dist/bin/snowflake-axi.js"
+    "snowflake-axi": "dist/bin/snowflake-axi.js",
+    "snowflake-axi-context": "dist/bin/snowflake-axi-context.js"
   },
   "files": [
     "dist",

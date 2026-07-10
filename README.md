@@ -26,6 +26,7 @@ snowflake-axi git             # git repositories on Snowflake, account-wide
 snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO  # branches with commit hashes
 snowflake-axi stage @DB.SCHEMA.STAGE
 snowflake-axi allow           # write capabilities and their grant status
+snowflake-axi hooks           # session-start hook status; see Agent integration
 snowflake-axi <command> --help
 ```
 
@@ -123,12 +124,24 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `git fetch <repo>` | Refresh a repository from its origin (FETCH); write, needs the `git.fetch` grant; `--role` |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
 | `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
+| `context` | One-line config-derived orientation for session hooks; no connection, silent when unconfigured |
+| `hooks` | SessionStart hook status; `install` registers it for Claude Code, Codex, and OpenCode, `remove` withdraws it |
 | `update` | Self-update (built into axi-sdk-js) |
 
-## Agent skill
+Structured commands accept unquoted identifiers only.
+A table created with a quoted lowercase or special-character name (such as `"my table"`) is reachable through `query`, which passes SQL through verbatim, but not through `tables`, `schema`, or `sample`.
+
+## Agent integration
+
+Two complementary paths teach agents that the tool exists; install whichever fits, or both.
+
+The session hook gives every agent session a one-line ambient context: running `snowflake-axi hooks install` (explicit opt-in) registers a SessionStart hook for Claude Code, Codex, and OpenCode.
+The hook runs the `snowflake-axi-context` binary (an argument-less alias of the `context` command, which session hooks require), printing a compact config-derived line - no connection is made, so it can never hang a session start, and unconfigured machines stay silent.
+Rerunning install repairs a moved binary path; `snowflake-axi hooks remove` withdraws the hook everywhere.
 
 `skill/SKILL.md` is an installable [Agent Skill](https://agentskills.io) teaching agents the command surface upfront, so no discovery turns are spent on `--help`.
 Copy it to your agent's skill directory (for Claude Code: `~/.claude/skills/snowflake-axi/SKILL.md`), optionally appending guidance for any private plugin commands.
+It loads on demand with no per-session token cost, and works in any agent that supports the skill format.
 
 ## Plugins
 

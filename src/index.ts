@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { runAxiCli } from "axi-sdk-js";
 import type { CommandSpec } from "./command.js";
 import { allowCommand } from "./commands/allow.js";
+import { contextCommand } from "./commands/context.js";
 import { dbtCommand } from "./commands/dbt.js";
+import { hooksCommand } from "./commands/hooks.js";
 import { findCommand } from "./commands/find.js";
 import { gitCommand } from "./commands/git.js";
 import { homeView } from "./commands/home.js";
@@ -34,6 +36,8 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   git: gitCommand,
   stage: stageCommand,
   allow: allowCommand,
+  context: contextCommand,
+  hooks: hooksCommand,
 };
 
 function topLevelHelp(specs: Record<string, CommandSpec>): string {
@@ -53,7 +57,7 @@ Run \`snowflake-axi <command> --help\` for flags and examples.
 `;
 }
 
-export async function main(): Promise<void> {
+export async function main(argv?: string[]): Promise<void> {
   const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as {
     version: string;
   };
@@ -65,6 +69,7 @@ export async function main(): Promise<void> {
   await runAxiCli({
     description: DESCRIPTION,
     version: pkg.version,
+    argv,
     topLevelHelp: topLevelHelp(specs),
     getCommandHelp: (command) => specs[command]?.help,
     home: () => homeView(plugins.homeHelp),
