@@ -29,7 +29,7 @@ export const loginCommand = defineCommand("login", {
     notes: [
       "Needs SNOWFLAKE_ACCOUNT and SNOWFLAKE_OAUTH_CLIENT_ID in the env file; the README's OAuth setup covers the one-time security integration.",
       "SNOWFLAKE_OAUTH_ROLE_SCOPE in the env file sets a default for --role.",
-      "OAuth sessions are pinned to the token's role; switching roles means logging in again (per-query --role needs PAT auth).",
+      "OAuth sessions are pinned to the token's one role - secondary roles are suppressed and per-query --role fails; switching means logging in again, and role breadth needs PAT auth.",
       "The token file makes OAuth the active auth mode; SNOWFLAKE_AUTH=pat forces PAT again without deleting it.",
       "Snowflake blocks ACCOUNTADMIN and SECURITYADMIN sessions over OAuth by default.",
     ],

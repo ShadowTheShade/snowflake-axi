@@ -130,6 +130,8 @@ Constraints worth knowing:
 
 - Every OAuth session is pinned to the token's role: the user's default role, or the one from `login --role <name>` / `SNOWFLAKE_OAUTH_ROLE_SCOPE` (`session:role:<name>` is the only session scope Snowflake's built-in OAuth accepts).
   Switching roles means logging in again; per-query `--role` only works with PAT auth.
+- Secondary roles are suppressed too (verified live: `CURRENT_SECONDARY_ROLES()` is empty under OAuth even with `DEFAULT_SECONDARY_ROLES = ('ALL')` on the user).
+  An OAuth session is exactly the token's one role; role breadth needs a PAT.
 - Snowflake blocks ACCOUNTADMIN and SECURITYADMIN sessions over OAuth by default.
 - Local dbt verbs still need a PAT: dbt authenticates with the token as a password, which OAuth access tokens are not.
 - The refresh token on disk is a long-lived credential; the file is 0600 and should be treated like a PAT.
