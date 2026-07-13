@@ -16,7 +16,7 @@ snowflake-axi find flavor     # search tables/views by name across the account
 snowflake-axi schema MY_TABLE # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT COUNT(*) FROM MY_TABLE"
-snowflake-axi exec "UPDATE MY_TABLE SET STATUS = 'DONE' WHERE ID = 1"   # write, gated by sql.write
+snowflake-axi query "UPDATE MY_TABLE SET STATUS = 'DONE' WHERE ID = 1"   # write, gated by sql.write
 snowflake-axi result 01b66701-0000-23c5-0000-45a100012345  # collect an earlier statement's output
 snowflake-axi semantics       # semantic views: the curated map of tables, metrics, verified queries
 snowflake-axi warehouses      # states + 7-day credit burn
@@ -33,7 +33,7 @@ snowflake-axi pg              # Snowflake Postgres: every schema's tables, large
 snowflake-axi pg schema orders              # columns, types, defaults, primary key
 snowflake-axi pg sample orders --limit 3
 snowflake-axi pg query "SELECT count(*) FROM orders"
-snowflake-axi pg exec "UPDATE MY_TABLE SET status = 'done' WHERE id = 1"   # write, gated by pg.write
+snowflake-axi pg query "UPDATE MY_TABLE SET status = 'done' WHERE id = 1"   # write, gated by pg.write
 snowflake-axi allow           # write capabilities and their grant status
 snowflake-axi hooks           # session-start hook status; see Agent integration
 snowflake-axi <command> --help
@@ -153,11 +153,11 @@ Constraints worth knowing:
 Two independent layers keep everyday use read-only:
 
 1. Run it as a service user whose role can only SELECT.
-2. `query` validates SQL before any connection is made: single statement only, head keyword must be SELECT, WITH, SHOW, DESC, DESCRIBE, or EXPLAIN.
+2. `query` classifies each statement before any connection is made: a read (SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN) runs for free, and anything else is treated as a write and refused unless `sql.write` is granted. Single statement only.
 
-Write statements through `query` are rejected with the SQL echoed back; they belong on `exec`, the gated write verb (see "Writing to Snowflake" below).
+So reading is always free, and writing through `query` is gated by consent (see "Writing to Snowflake" below).
 
-Specific write commands exist (`exec` for raw Snowflake DML/DDL, the local `dbt run`/`build`/`test`/`seed`/`snapshot`, plus `dbt execute`, `dbt deploy`, `dbt drop`, `git fetch`, and `pg exec` for Snowflake Postgres) but are disabled until the user opts in, MCP-style:
+Specific write commands exist (`query`/`pg query` for raw Snowflake and Postgres DML/DDL, the local `dbt run`/`build`/`test`/`seed`/`snapshot`, plus `dbt execute`, `dbt deploy`, `dbt drop`, and `git fetch`) but are disabled until the user opts in, MCP-style:
 
 - Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask the user in conversation.
 - Once the user agrees, the agent runs `snowflake-axi allow <capability> --agent`; the harness permission prompt for that command is the user's confirmation click.
@@ -175,8 +175,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `find <pattern>` | Search tables and views by name across every database the roles can see |
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
-| `query <sql>` | One read-only statement; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout`, one-off `--warehouse` / `--role` |
-| `exec <sql>` | One write statement (INSERT/UPDATE/DELETE/MERGE/TRUNCATE + CREATE/ALTER/DROP/UNDROP + COPY/CALL); write, needs the `sql.write` grant; surfaces Snowflake's count/status row; `--full`, `--limit`, `--timeout`, `--warehouse`, `--role` |
+| `query <sql>` | One statement; reads run free, a write (anything not SELECT/WITH/SHOW/DESC/EXPLAIN) needs the `sql.write` grant and reports Snowflake's count/status row; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout`, one-off `--warehouse` / `--role` |
 | `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
 | `semantics [name]` | Semantic views account-wide; per view: tables, metrics, dimensions, custom instructions, verified queries (`--like` filters, `--sql <query>` prints blessed SQL) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
@@ -194,8 +193,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `pg [tables [schema]]` | Snowflake Postgres tables largest first with estimated rows and size; `--like`, `--views`, `--limit` |
 | `pg schema <table>` | Columns with types, nullability, and defaults, plus primary key and size; names resolve case-insensitively |
 | `pg sample <table>` | Preview Postgres rows; `--fields`, `--where`, `--limit`, `--full` |
-| `pg query <sql>` | One read-only Postgres statement; definitive completeness reporting, `--limit`, `--full`, `--timeout` |
-| `pg exec <sql>` | One Postgres write statement (INSERT/UPDATE/DELETE/MERGE + CREATE/ALTER/DROP/TRUNCATE); write, needs the `pg.write` grant; reports `affected` and any RETURNING rows; `--full`, `--timeout` |
+| `pg query <sql>` | One Postgres statement; reads run free on a server read-only session, a write needs the `pg.write` grant and reports the command tag, `affected` count, and any RETURNING rows; definitive completeness reporting, `--limit`, `--full`, `--timeout` |
 | `allow [capability]` | List, grant (interactive terminal only), or revoke write capabilities |
 | `context` | One-line config-derived orientation for session hooks; no connection, silent when unconfigured |
 | `hooks` | SessionStart hook status; `install` registers it for Claude Code, Codex, and OpenCode, `remove` withdraws it |
@@ -206,13 +204,13 @@ A table created with a quoted lowercase or special-character name (such as `"my 
 
 ## Writing to Snowflake
 
-`exec` runs one raw write statement over the same SQL API `query` uses, disabled until the user grants `sql.write` (see "Read-only by default, writes by consent" above).
-It accepts a single statement whose head is INSERT, UPDATE, DELETE, MERGE, TRUNCATE, CREATE, ALTER, DROP, UNDROP, COPY, or CALL; read heads are bounced back to `query`.
-`EXECUTE IMMEDIATE` and other dynamic-SQL forms are deliberately out of scope - they run SQL from a string, which would defeat the head check - and anything else (GRANT, USE, PUT/GET, ...) is handed to the operator, keeping the executable surface legible.
+`query` runs any single statement, and classifies it by head keyword: a read (SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN) runs for free, and anything else is a write.
+A write is refused with `WRITE_NOT_ALLOWED` until the user grants `sql.write` (see "Read-only by default, writes by consent" above); once granted, the same command runs it.
+There is no allow-list of write verbs: whatever the token's role can do, a granted `query` can do, so INSERT, UPDATE, DELETE, MERGE, TRUNCATE, CREATE, ALTER, DROP, COPY, CALL, GRANT, and the rest all work through the one verb.
 
-The grant is consent, not privilege: what the token's role is granted to do remains the hard boundary on what `exec` can actually change, so grant the service user exactly the roles you intend an agent to reach.
-Output is whatever Snowflake returns for the statement: a single DML count row (`number of rows deleted: 5`) or DDL status row is surfaced inline as `result`, while COPY and CALL that return many rows are shaped like a read with a definitive count.
-`--warehouse` and `--role` pick a one-off warehouse or role for the statement, the same as `query`.
+The grant is consent, not privilege: what the token's role is granted to do remains the hard boundary on what a write can actually change, so grant the service user exactly the roles you intend an agent to reach.
+Output for a write is whatever Snowflake returns: a single DML count row (`number of rows deleted: 5`) or DDL status row is surfaced inline as `result`, while COPY and CALL that return many rows are shaped like a read with a definitive count.
+`--warehouse` and `--role` pick a one-off warehouse or role for the statement, reads and writes alike.
 
 ## Local dbt
 
@@ -232,7 +230,7 @@ The dbt CLI must be installed separately, for example as a uv tool: dbt-core wit
 
 ## Snowflake Postgres
 
-The `pg` command group explores a Snowflake Postgres database over a direct wire connection, mirroring the Snowflake surface verb for verb: `pg tables`, `pg schema`, `pg sample`, `pg query`, plus the gated `pg exec` for writes.
+The `pg` command group explores a Snowflake Postgres database over a direct wire connection, mirroring the Snowflake surface verb for verb: `pg tables`, `pg schema`, `pg sample`, and `pg query` (which reads for free and runs writes behind the pg.write grant).
 Bare `pg` lists every user schema's tables largest first with a connection header, so one call orients an agent completely.
 
 The connection is configured with its own keys in the same env file, deliberately separate from any ambient `PGHOST`-style variables so shell state from unrelated work can never retarget the tool:
@@ -246,16 +244,13 @@ SNOWFLAKE_AXI_PG_DATABASE=<optional, default postgres>
 SNOWFLAKE_AXI_PG_SSLMODE=<optional: disable, require (default), verify-full>
 ```
 
-The read surface (`pg tables`, `pg schema`, `pg sample`, `pg query`) is read-only end to end, with three independent layers:
+`pg query` classifies each statement by head keyword and takes one of two paths:
 
-1. `pg query` validates the statement before connecting: single statement, head keyword must be SELECT, WITH, TABLE, VALUES, SHOW, or EXPLAIN - and EXPLAIN itself may only wrap SELECT, WITH, TABLE, or VALUES, because `EXPLAIN ANALYZE` executes what it plans and its CREATE TABLE AS form slips past even a read-only transaction (verified live).
-2. Every read session opens with `default_transaction_read_only=on` in the startup packet, so DML smuggled past the head check (for example inside a data-modifying CTE) is rejected by the server.
-3. Statements run through the extended protocol, which makes multi-statement SQL a server-side error as well.
+- A read (SELECT, WITH, TABLE, VALUES, SHOW, or EXPLAIN over a read) runs on a session opened with `default_transaction_read_only=on` in the startup packet, so even DML smuggled past the head check (for example a data-modifying CTE, or `EXPLAIN ANALYZE INSERT`) is rejected by the server. No grant is needed.
+- Anything else is a write: refused with `WRITE_NOT_ALLOWED` until the user grants `pg.write`, then run on a session opened `default_transaction_read_only=off`. It reports the server command tag, the `affected` row count for DML, and any RETURNING rows (200-char cell truncation, `--full`).
 
-Writes go through `pg exec`, disabled until the user grants `pg.write` (see "Read-only by default, writes by consent" above).
-It accepts one statement whose head is INSERT, UPDATE, DELETE, MERGE, CREATE, ALTER, DROP, or TRUNCATE; read heads are bounced back to `pg query` and anything else (COPY, VACUUM, GRANT, DO, ...) is handed to the operator.
-The write session opens with `default_transaction_read_only=off`, but the Postgres role's own privileges remain the hard boundary on what can actually change.
-It reports the server command tag, the `affected` row count for DML, and any RETURNING rows (200-char cell truncation, `--full`); the same single-statement guarantee holds because writes also run over the extended protocol.
+`EXPLAIN ANALYZE` is classified by what it wraps, because it executes what it plans: `EXPLAIN ANALYZE SELECT` is a read, but `EXPLAIN ANALYZE INSERT` (or the `CREATE TABLE AS` form that slips past even a read-only transaction, verified live) counts as a write.
+Both paths run through the extended protocol, which makes multi-statement SQL a server-side error, and the Postgres role's own privileges remain the hard boundary on what a write can actually change.
 
 Row counts in `pg tables` and `pg schema` are planner estimates (`reltuples`); a blank means the table was never analyzed.
 `pg query` streams through a cursor and probes one row past `--limit`, so it reports either an exact `N (complete)` or an honest `first N rows (more exist)` without ever buffering an unbounded result.

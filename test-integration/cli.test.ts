@@ -46,25 +46,19 @@ describe("offline behaviors (no credentials required)", () => {
     expect(stdout).toContain("--like");
   });
 
-  it("write SQL is rejected with READ_ONLY before any connection", async () => {
-    const { stdout, code } = await cli(["query", "DELETE FROM ANYTHING"]);
+  it("a write through query is refused without the sql.write grant, before any connection", async () => {
+    const { stdout, code } = await cli(["query", "DELETE FROM ANYTHING WHERE ID = 1"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+    });
     expect(code).toBe(1);
-    expect(stdout).toContain("READ_ONLY");
+    expect(stdout).toContain("WRITE_NOT_ALLOWED");
+    expect(stdout).toContain("allow sql.write");
   });
 
   it("multi-statement SQL is rejected with exit 2", async () => {
     const { stdout, code } = await cli(["query", "SELECT 1; SELECT 2"]);
     expect(code).toBe(2);
     expect(stdout).toContain("Multiple statements");
-  });
-
-  it("exec is refused without the sql.write grant, before any connection", async () => {
-    const { stdout, code } = await cli(["exec", "DELETE FROM ANYTHING WHERE ID = 1"], {
-      XDG_CONFIG_HOME: "/nonexistent-axi-config",
-    });
-    expect(code).toBe(1);
-    expect(stdout).toContain("WRITE_NOT_ALLOWED");
-    expect(stdout).toContain("allow sql.write");
   });
 
   it("stray positional arguments are rejected with exit 2, before any connection", async () => {
@@ -95,25 +89,29 @@ describe("offline behaviors (no credentials required)", () => {
     expect(stdout).toContain("false");
   });
 
-  it("pg write SQL is rejected with READ_ONLY before any connection", async () => {
-    const { stdout, code } = await cli(["pg", "query", "DELETE FROM anything"]);
+  it("a pg write is refused without the pg.write grant, before any connection", async () => {
+    const { stdout, code } = await cli(["pg", "query", "DELETE FROM anything WHERE id = 1"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+    });
     expect(code).toBe(1);
-    expect(stdout).toContain("READ_ONLY");
+    expect(stdout).toContain("WRITE_NOT_ALLOWED");
+    expect(stdout).toContain("allow pg.write");
   });
 
-  it("pg write verbs are redirected to pg exec with exit 2, before any connection", async () => {
+  it("pg write verbs are redirected to pg query with exit 2, before any connection", async () => {
     const { stdout, code } = await cli(["pg", "insert", "into", "t"]);
     expect(code).toBe(2);
-    expect(stdout).toContain("pg exec");
+    expect(stdout).toContain("pg query");
   });
 
-  it("pg EXPLAIN ANALYZE around a write is rejected before any connection", async () => {
-    // EXPLAIN ANALYZE executes what it plans, and the CREATE TABLE AS form
-    // slips past the server's read-only-transaction check, so the client
-    // validator must catch it.
-    const { stdout, code } = await cli(["pg", "query", "EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1"]);
+  it("pg EXPLAIN ANALYZE around a write is classified as a write, refused before any connection", async () => {
+    // EXPLAIN ANALYZE executes what it plans, and the CREATE TABLE AS form slips
+    // past a read-only transaction, so the classifier must treat it as a write.
+    const { stdout, code } = await cli(["pg", "query", "EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+    });
     expect(code).toBe(1);
-    expect(stdout).toContain("READ_ONLY");
+    expect(stdout).toContain("WRITE_NOT_ALLOWED");
   });
 
   it("pg without connection settings fails with the keys to add", async () => {

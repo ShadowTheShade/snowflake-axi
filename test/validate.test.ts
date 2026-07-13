@@ -1,6 +1,6 @@
 import { AxiError } from "axi-sdk-js";
 import { describe, expect, it } from "vitest";
-import { assertPgReadOnly, assertPgWrite, assertReadOnly, assertWrite } from "../src/validate.js";
+import { assertPgReadOnly, assertReadOnly, classifyPgStatement, classifyStatement } from "../src/validate.js";
 
 function codeOf(fn: () => unknown): string {
   try {
@@ -126,7 +126,6 @@ describe("assertPgReadOnly", () => {
     "EXPLAIN (ANALYZE, BUFFERS) DELETE FROM t",
     "EXPLAIN VERBOSE INSERT INTO t VALUES (1)",
     "EXPLAIN ANALYZE EXECUTE plan(1)",
-    "EXPLAIN",
   ])("rejects %s: EXPLAIN may only wrap a read statement", (sql) => {
     expect(codeOf(() => assertPgReadOnly(sql))).toBe("READ_ONLY");
   });
@@ -136,119 +135,93 @@ describe("assertPgReadOnly", () => {
   });
 });
 
-describe("assertPgWrite", () => {
+describe("classifyStatement", () => {
   it.each([
-    ["INSERT INTO t VALUES (1)", "INSERT"],
-    ["update t set a = 1", "UPDATE"],
-    ["DELETE FROM t WHERE id = 1", "DELETE"],
-    ["MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE", "MERGE"],
-    ["CREATE TABLE t (a int)", "CREATE"],
-    ["ALTER TABLE t ADD COLUMN b int", "ALTER"],
-    ["DROP TABLE t", "DROP"],
-    ["TRUNCATE t", "TRUNCATE"],
-    ["INSERT INTO t VALUES (1) RETURNING id", "INSERT"],
-  ])("accepts %s", (sql, head) => {
-    expect(assertPgWrite(sql).head).toBe(head);
+    ["SELECT 1", "SELECT", "read"],
+    ["WITH x AS (SELECT 1) SELECT * FROM x", "WITH", "read"],
+    ["SHOW DATABASES", "SHOW", "read"],
+    ["DESC TABLE t", "DESC", "read"],
+    ["DESCRIBE TABLE t", "DESCRIBE", "read"],
+    ["EXPLAIN SELECT 1", "EXPLAIN", "read"],
+    ["INSERT INTO t VALUES (1)", "INSERT", "write"],
+    ["update t set a = 1", "UPDATE", "write"],
+    ["DELETE FROM t", "DELETE", "write"],
+    ["MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE", "MERGE", "write"],
+    ["TRUNCATE TABLE t", "TRUNCATE", "write"],
+    ["CREATE TABLE t (a INT)", "CREATE", "write"],
+    ["DROP TABLE t", "DROP", "write"],
+    ["COPY INTO t FROM @stage", "COPY", "write"],
+    ["CALL my_proc()", "CALL", "write"],
+    ["GRANT SELECT ON t TO ROLE r", "GRANT", "write"],
+    ["EXECUTE IMMEDIATE 'DROP TABLE t'", "EXECUTE", "write"],
+  ])("classifies %s as %s/%s", (sql, head, kind) => {
+    const c = classifyStatement(sql);
+    expect(c.head).toBe(head);
+    expect(c.kind).toBe(kind);
   });
 
   it("strips a trailing semicolon", () => {
-    expect(assertPgWrite("DELETE FROM t;").sql).toBe("DELETE FROM t");
-  });
-
-  it.each([
-    "SELECT 1",
-    "WITH x AS (SELECT 1) SELECT * FROM x",
-    "TABLE orders",
-    "VALUES (1)",
-    "SHOW x",
-    "EXPLAIN SELECT 1",
-  ])("bounces read statement %s to pg query", (sql) => {
-    expect(codeOf(() => assertPgWrite(sql))).toBe("VALIDATION_ERROR");
-    expect(() => assertPgWrite(sql)).toThrowError(/read statement/);
-  });
-
-  it.each([
-    "COPY t FROM stdin",
-    "VACUUM t",
-    "GRANT SELECT ON t TO r",
-    "CALL p()",
-    "DO $$ BEGIN END $$",
-  ])("refuses unsupported write %s with the supported set", (sql) => {
-    expect(codeOf(() => assertPgWrite(sql))).toBe("VALIDATION_ERROR");
-    expect(() => assertPgWrite(sql)).toThrowError(/not supported/);
-  });
-
-  it("rejects multiple statements", () => {
-    expect(codeOf(() => assertPgWrite("DELETE FROM t; DELETE FROM u"))).toBe("VALIDATION_ERROR");
-  });
-
-  it("rejects empty input", () => {
-    expect(codeOf(() => assertPgWrite("  -- just a comment"))).toBe("VALIDATION_ERROR");
-  });
-
-  it("is not fooled by a semicolon inside a literal", () => {
-    expect(assertPgWrite("UPDATE t SET note = 'a; b' WHERE id = 1").head).toBe("UPDATE");
-  });
-});
-
-describe("assertWrite", () => {
-  it.each([
-    ["INSERT INTO t VALUES (1)", "INSERT"],
-    ["update t set a = 1", "UPDATE"],
-    ["DELETE FROM t WHERE id = 1", "DELETE"],
-    ["MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE", "MERGE"],
-    ["TRUNCATE TABLE t", "TRUNCATE"],
-    ["CREATE TABLE t (a INT)", "CREATE"],
-    ["ALTER TABLE t ADD COLUMN b INT", "ALTER"],
-    ["DROP TABLE t", "DROP"],
-    ["UNDROP TABLE t", "UNDROP"],
-    ["COPY INTO t FROM @stage", "COPY"],
-    ["CALL my_proc()", "CALL"],
-  ])("accepts %s", (sql, head) => {
-    expect(assertWrite(sql).head).toBe(head);
-  });
-
-  it("strips a trailing semicolon", () => {
-    expect(assertWrite("DELETE FROM t;").sql).toBe("DELETE FROM t");
+    expect(classifyStatement("DELETE FROM t;").sql).toBe("DELETE FROM t");
   });
 
   it("skips a leading // comment when detecting the head", () => {
-    expect(assertWrite("// comment\nDELETE FROM t").head).toBe("DELETE");
-  });
-
-  it.each([
-    "SELECT 1",
-    "WITH x AS (SELECT 1) SELECT * FROM x",
-    "SHOW TABLES",
-    "DESC TABLE t",
-    "DESCRIBE TABLE t",
-    "EXPLAIN SELECT 1",
-  ])("bounces read statement %s to query", (sql) => {
-    expect(codeOf(() => assertWrite(sql))).toBe("VALIDATION_ERROR");
-    expect(() => assertWrite(sql)).toThrowError(/read statement/);
-  });
-
-  it.each([
-    "EXECUTE IMMEDIATE 'DROP TABLE t'",
-    "EXECUTE TASK my_task",
-    "GRANT SELECT ON t TO ROLE r",
-    "REVOKE SELECT ON t FROM ROLE r",
-    "USE WAREHOUSE wh",
-    "PUT file://a @stage",
-  ])("refuses unsupported statement %s with the supported set", (sql) => {
-    expect(codeOf(() => assertWrite(sql))).toBe("VALIDATION_ERROR");
-    expect(() => assertWrite(sql)).toThrowError(/not supported/);
+    expect(classifyStatement("// comment\nDELETE FROM t").kind).toBe("write");
   });
 
   it("rejects multiple statements", () => {
-    expect(codeOf(() => assertWrite("DELETE FROM t; DELETE FROM u"))).toBe("VALIDATION_ERROR");
+    expect(codeOf(() => classifyStatement("SELECT 1; SELECT 2"))).toBe("VALIDATION_ERROR");
   });
 
   it("rejects empty input", () => {
-    expect(codeOf(() => assertWrite("  -- just a comment"))).toBe("VALIDATION_ERROR");
+    expect(codeOf(() => classifyStatement("  -- just a comment"))).toBe("VALIDATION_ERROR");
   });
 
   it("is not fooled by a semicolon inside a literal", () => {
-    expect(assertWrite("UPDATE t SET note = 'a; b' WHERE id = 1").head).toBe("UPDATE");
+    expect(classifyStatement("UPDATE t SET note = 'a; b' WHERE id = 1").kind).toBe("write");
+  });
+});
+
+describe("classifyPgStatement", () => {
+  it.each([
+    ["SELECT 1", "SELECT", "read"],
+    ["WITH x AS (SELECT 1) SELECT * FROM x", "WITH", "read"],
+    ["TABLE orders", "TABLE", "read"],
+    ["VALUES (1)", "VALUES", "read"],
+    ["SHOW server_version", "SHOW", "read"],
+    ["EXPLAIN SELECT 1", "EXPLAIN", "read"],
+    ["EXPLAIN (FORMAT JSON) TABLE users", "EXPLAIN", "read"],
+    ["INSERT INTO t VALUES (1)", "INSERT", "write"],
+    ["UPDATE t SET a = 1", "UPDATE", "write"],
+    ["DELETE FROM t", "DELETE", "write"],
+    ["MERGE INTO t USING s ON 1=1 WHEN MATCHED THEN DELETE", "MERGE", "write"],
+    ["TRUNCATE t", "TRUNCATE", "write"],
+    ["CREATE TABLE t (a int)", "CREATE", "write"],
+    ["DROP TABLE t", "DROP", "write"],
+    ["ANALYZE t", "ANALYZE", "write"],
+    ["VACUUM t", "VACUUM", "write"],
+    ["GRANT SELECT ON t TO r", "GRANT", "write"],
+    ["COPY t FROM stdin", "COPY", "write"],
+  ])("classifies %s as %s/%s", (sql, head, kind) => {
+    const c = classifyPgStatement(sql);
+    expect(c.head).toBe(head);
+    expect(c.kind).toBe(kind);
+  });
+
+  it("classifies an EXPLAIN ANALYZE that would execute a write as a write", () => {
+    expect(classifyPgStatement("EXPLAIN ANALYZE INSERT INTO t VALUES (1)").kind).toBe("write");
+    expect(classifyPgStatement("EXPLAIN (ANALYZE) DELETE FROM t").kind).toBe("write");
+    expect(classifyPgStatement("EXPLAIN ANALYZE CREATE TABLE t AS SELECT 1").kind).toBe("write");
+  });
+
+  it("keeps EXPLAIN around a read a read", () => {
+    expect(classifyPgStatement("EXPLAIN ANALYZE SELECT 1").kind).toBe("read");
+  });
+
+  it("rejects multiple statements", () => {
+    expect(codeOf(() => classifyPgStatement("SELECT 1; SELECT 2"))).toBe("VALIDATION_ERROR");
+  });
+
+  it("tracks tagged dollar quotes so a ; inside is not a second statement", () => {
+    expect(classifyPgStatement("UPDATE t SET x = $tag$ a ; b $tag$").kind).toBe("write");
   });
 });

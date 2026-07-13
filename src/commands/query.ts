@@ -1,8 +1,9 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { CELL_LIMIT, presentRows } from "../present.js";
+import { requireGrant } from "../grants.js";
+import { CELL_LIMIT, presentRows, presentWrite } from "../present.js";
 import { runQuery } from "../snowflake.js";
-import { assertReadOnly } from "../validate.js";
+import { classifyStatement } from "../validate.js";
 
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
@@ -13,7 +14,8 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   if (!rawSql) {
     throw new AxiError("No SQL provided", "VALIDATION_ERROR", ['Run `snowflake-axi query "SELECT ..."`']);
   }
-  const { sql } = assertReadOnly(rawSql);
+  const { sql, kind } = classifyStatement(rawSql);
+  if (kind === "write") requireGrant("sql.write");
 
   const started = Date.now();
   const result = await runQuery(sql, {
@@ -23,13 +25,15 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
     role: args.str("--role"),
   });
   const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-  return { ...presentRows(result, full), elapsed };
+  const presented = kind === "write" ? presentWrite(result, full) : presentRows(result, full);
+  return { ...presented, elapsed };
 }
 
 export const queryCommand = defineCommand("query", {
-  summary: "Run read-only SQL (SELECT/WITH/SHOW/DESC/EXPLAIN)",
+  summary: "Run one SQL statement; reads are free, writes need the sql.write grant",
   action: {
-    description: "Run one read-only SQL statement; write statements are rejected with the SQL handed back",
+    description:
+      "Run one Snowflake SQL statement over the SQL API. Reads run for free; a write (anything that is not SELECT/WITH/SHOW/DESC/EXPLAIN) is refused until the user grants sql.write",
     positionals: { usage: '"<sql>"', min: 0, max: Number.POSITIVE_INFINITY },
     flags: {
       "--limit": {
@@ -62,13 +66,14 @@ export const queryCommand = defineCommand("query", {
     },
     notes: [
       "Unqualified table names resolve against the session's default namespace.",
-      "Allowed statement heads: SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN.",
-      "Long statements print their handle to stderr; `snowflake-axi result <handle>` collects the output later.",
+      "Reads (SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN) need no grant; any other statement is a write.",
+      "Writes are refused with WRITE_NOT_ALLOWED until the user grants sql.write (see `snowflake-axi allow --help`); the role stays the hard boundary on what can change.",
+      "Single statement only. A write reports Snowflake's count/status row; long statements print a handle to stderr for `snowflake-axi result <handle>`.",
     ],
     examples: [
       'snowflake-axi query "SELECT COUNT(*) FROM FCT_ORDERS"',
       'snowflake-axi query "SHOW SCHEMAS IN DATABASE SCOOPS_DB"',
-      "snowflake-axi query \"SELECT * FROM DIM_CUSTOMERS WHERE REGION = 'EMEA'\" --limit 100",
+      "snowflake-axi query \"UPDATE FCT_ORDERS SET STATUS = 'SHIPPED' WHERE ID = 42\"",
     ],
     run,
   },

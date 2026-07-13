@@ -33,13 +33,13 @@ export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: 
   },
   "sql.write": {
     description:
-      "Run write statements over the Snowflake SQL API: INSERT, UPDATE, DELETE, MERGE, TRUNCATE, DDL (CREATE, ALTER, DROP, UNDROP), plus COPY and CALL",
-    unlocks: 'snowflake-axi exec "UPDATE <table> SET ..."',
+      "Run write statements through `query` over the Snowflake SQL API (anything that is not a SELECT/WITH/SHOW/DESC/EXPLAIN read); the role stays the hard boundary",
+    unlocks: 'snowflake-axi query "UPDATE <table> SET ..."',
   },
   "pg.write": {
     description:
-      "Run write statements against Snowflake Postgres: INSERT, UPDATE, DELETE, MERGE, and DDL (CREATE, ALTER, DROP, TRUNCATE)",
-    unlocks: 'snowflake-axi pg exec "UPDATE <table> SET ..."',
+      "Run write statements through `pg query` against Snowflake Postgres (anything that is not a SELECT/WITH/TABLE/VALUES/SHOW/EXPLAIN read); the role stays the hard boundary",
+    unlocks: 'snowflake-axi pg query "UPDATE <table> SET ..."',
   },
 };
 

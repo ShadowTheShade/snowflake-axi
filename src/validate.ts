@@ -1,35 +1,16 @@
 import { AxiError } from "axi-sdk-js";
 
+// A statement is a read iff its head is one of these; everything else is a
+// write. There is no write-head enumeration: `query`/`pg query` read for free
+// and gate any non-read behind the write grant, so the set of runnable writes
+// is "whatever the granted role allows", not a curated list.
 const SNOWFLAKE_READ_HEADS = new Set(["SELECT", "WITH", "SHOW", "DESC", "DESCRIBE", "EXPLAIN"]);
 const PG_READ_HEADS = new Set(["SELECT", "WITH", "TABLE", "VALUES", "SHOW", "EXPLAIN"]);
-
-// The write surface `exec` accepts on Snowflake: DML, the everyday DDL, plus
-// COPY and CALL. EXECUTE (IMMEDIATE) is deliberately excluded - it runs SQL from
-// a string, which would defeat head checking - and anything else (GRANT, USE,
-// PUT/GET, ...) is handed to the operator so the executable set stays legible.
-const SNOWFLAKE_WRITE_HEADS = new Set([
-  "INSERT",
-  "UPDATE",
-  "DELETE",
-  "MERGE",
-  "TRUNCATE",
-  "CREATE",
-  "ALTER",
-  "DROP",
-  "UNDROP",
-  "COPY",
-  "CALL",
-]);
-
-// The write surface `pg exec` accepts: DML plus the everyday DDL. Everything
-// else (COPY, VACUUM, GRANT, DO, CALL, ...) stays out of scope and is handed
-// to the operator, keeping the executable statements few and predictable.
-const PG_WRITE_HEADS = new Set(["INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE"]);
 
 // Postgres EXPLAIN ANALYZE executes the statement it plans, and the
 // CREATE TABLE AS / CREATE MATERIALIZED VIEW AS forms slip past the server's
 // read-only-transaction check (verified live: the table really gets created).
-// So EXPLAIN may only wrap statements that are read-only themselves.
+// So an EXPLAIN wrapping anything but these read heads is classified as a write.
 const PG_EXPLAIN_INNER_HEADS = new Set(["SELECT", "WITH", "TABLE", "VALUES"]);
 const PG_EXPLAIN_OPTION_WORDS = new Set([
   "ANALYZE",
@@ -172,85 +153,47 @@ function scanStatement(
   return { head, sql: stripped, tokens };
 }
 
-function assertReadHead(
-  sql: string,
-  dialect: Dialect,
-  heads: Set<string>,
-  example: string,
-): { head: string; sql: string; tokens: string[] } {
-  const result = scanStatement(sql, dialect, example);
-  if (!heads.has(result.head)) {
-    throw new AxiError(`${result.head} statements are not allowed (read-only tool)`, "READ_ONLY", [
-      `Allowed statements: ${[...heads].join(", ")}`,
-      "Hand write statements to the operator to run manually",
-    ]);
-  }
-  return result;
+export type StatementKind = "read" | "write";
+
+export interface ClassifiedStatement {
+  head: string;
+  sql: string;
+  kind: StatementKind;
 }
 
+/** Classifies one Snowflake statement as a read or a write; `query` gates writes behind the grant. */
+export function classifyStatement(sql: string): ClassifiedStatement {
+  const { head, sql: stripped } = scanStatement(sql, SNOWFLAKE, 'snowflake-axi query "SELECT ..."');
+  return { head, sql: stripped, kind: SNOWFLAKE_READ_HEADS.has(head) ? "read" : "write" };
+}
+
+/** Classifies one Postgres statement; an EXPLAIN ANALYZE that would execute a write counts as a write. */
+export function classifyPgStatement(sql: string): ClassifiedStatement {
+  const { head, sql: stripped, tokens } = scanStatement(sql, POSTGRES, 'snowflake-axi pg query "SELECT ..."');
+  if (!PG_READ_HEADS.has(head)) return { head, sql: stripped, kind: "write" };
+  if (head === "EXPLAIN") {
+    const inner = tokens.slice(1).find((token) => !PG_EXPLAIN_OPTION_WORDS.has(token));
+    if (inner !== undefined && !PG_EXPLAIN_INNER_HEADS.has(inner)) {
+      return { head, sql: stripped, kind: "write" };
+    }
+  }
+  return { head, sql: stripped, kind: "read" };
+}
+
+function assertRead(classified: ClassifiedStatement, allowed: Set<string>): { head: string; sql: string } {
+  if (classified.kind === "write") {
+    throw new AxiError(`${classified.head} statements are not allowed here (read-only)`, "READ_ONLY", [
+      `Allowed statements: ${[...allowed].join(", ")}`,
+    ]);
+  }
+  return { head: classified.head, sql: classified.sql };
+}
+
+/** Asserts an internally built statement is a read; used where the caller only ever emits SELECTs. */
 export function assertReadOnly(sql: string): { head: string; sql: string } {
-  return assertReadHead(sql, SNOWFLAKE, SNOWFLAKE_READ_HEADS, 'snowflake-axi query "SELECT ..."');
-}
-
-/**
- * Gate for `exec`: one Snowflake write statement, head in SNOWFLAKE_WRITE_HEADS.
- * Read heads are bounced to `query`; anything unrecognized (including EXECUTE
- * IMMEDIATE) is refused with the supported set so the agent self-corrects.
- */
-export function assertWrite(sql: string): { head: string; sql: string } {
-  const example = 'snowflake-axi exec "UPDATE <table> SET ..."';
-  const { head, sql: stripped } = scanStatement(sql, SNOWFLAKE, example);
-  if (SNOWFLAKE_READ_HEADS.has(head)) {
-    throw new AxiError(`${head} is a read statement, not a write`, "VALIDATION_ERROR", [
-      'Run reads through `snowflake-axi query "SELECT ..."`',
-    ]);
-  }
-  if (!SNOWFLAKE_WRITE_HEADS.has(head)) {
-    throw new AxiError(`${head} statements are not supported by \`exec\``, "VALIDATION_ERROR", [
-      `Supported write statements: ${[...SNOWFLAKE_WRITE_HEADS].join(", ")}`,
-      "Hand anything else to the operator to run manually",
-    ]);
-  }
-  return { head, sql: stripped };
+  return assertRead(classifyStatement(sql), SNOWFLAKE_READ_HEADS);
 }
 
 export function assertPgReadOnly(sql: string): { head: string; sql: string } {
-  const result = assertReadHead(sql, POSTGRES, PG_READ_HEADS, 'snowflake-axi pg query "SELECT ..."');
-  if (result.head === "EXPLAIN") {
-    const inner = result.tokens.slice(1).find((token) => !PG_EXPLAIN_OPTION_WORDS.has(token));
-    if (inner === undefined || !PG_EXPLAIN_INNER_HEADS.has(inner)) {
-      throw new AxiError(
-        `EXPLAIN may only wrap a read-only statement here${inner ? ` (got ${inner})` : ""}`,
-        "READ_ONLY",
-        [
-          `Allowed inside EXPLAIN: ${[...PG_EXPLAIN_INNER_HEADS].join(", ")}`,
-          "EXPLAIN ANALYZE executes the statement it plans, so writes inside it are writes",
-          "Hand write statements to the operator to run manually",
-        ],
-      );
-    }
-  }
-  return { head: result.head, sql: result.sql };
-}
-
-/**
- * Gate for `pg exec`: one write statement, head in PG_WRITE_HEADS. Read heads
- * are bounced to `pg query` (they belong on the read-only connection); anything
- * unrecognized is refused with the supported set so the agent self-corrects.
- */
-export function assertPgWrite(sql: string): { head: string; sql: string } {
-  const example = 'snowflake-axi pg exec "UPDATE <table> SET ..."';
-  const { head, sql: stripped } = scanStatement(sql, POSTGRES, example);
-  if (PG_READ_HEADS.has(head)) {
-    throw new AxiError(`${head} is a read statement, not a write`, "VALIDATION_ERROR", [
-      'Run reads through `snowflake-axi pg query "SELECT ..."`',
-    ]);
-  }
-  if (!PG_WRITE_HEADS.has(head)) {
-    throw new AxiError(`${head} statements are not supported by \`pg exec\``, "VALIDATION_ERROR", [
-      `Supported write statements: ${[...PG_WRITE_HEADS].join(", ")}`,
-      "Hand anything else to the operator to run manually",
-    ]);
-  }
-  return { head, sql: stripped };
+  return assertRead(classifyPgStatement(sql), PG_READ_HEADS);
 }

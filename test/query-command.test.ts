@@ -4,16 +4,42 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const runQuery = vi.hoisted(() => vi.fn());
 vi.mock("../src/snowflake.js", () => ({ runQuery }));
 
+const requireGrant = vi.hoisted(() => vi.fn());
+vi.mock("../src/grants.js", () => ({ requireGrant }));
+
 import { queryCommand } from "../src/commands/query.js";
 
 beforeEach(() => {
   runQuery.mockReset();
+  requireGrant.mockReset();
 });
 
 describe("query command", () => {
-  it("rejects write SQL before touching the connection", async () => {
-    await expect(queryCommand.run(["DELETE FROM FCT_ORDERS"])).rejects.toMatchObject({ code: "READ_ONLY" });
+  it("reads without requiring a grant", async () => {
+    runQuery.mockResolvedValueOnce({ rows: [{ A: "1" }], total: 1, numericColumns: new Set(["A"]) });
+    await queryCommand.run(["SELECT 1 AS A"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+  });
+
+  it("requires the sql.write grant for a write, before touching the connection", async () => {
+    requireGrant.mockImplementation(() => {
+      throw new AxiError("Write capability 'sql.write' is not granted", "WRITE_NOT_ALLOWED", []);
+    });
+    await expect(queryCommand.run(["DELETE FROM FCT_ORDERS"])).rejects.toMatchObject({ code: "WRITE_NOT_ALLOWED" });
+    expect(requireGrant).toHaveBeenCalledWith("sql.write");
     expect(runQuery).not.toHaveBeenCalled();
+  });
+
+  it("runs a granted write and surfaces the count row inline as result", async () => {
+    runQuery.mockResolvedValueOnce({
+      rows: [{ "number of rows deleted": "3" }],
+      total: 1,
+      numericColumns: new Set(["number of rows deleted"]),
+    });
+    const output = (await queryCommand.run(["DELETE FROM FCT_ORDERS WHERE ID < 4"])) as Record<string, unknown>;
+    expect(requireGrant).toHaveBeenCalledWith("sql.write");
+    expect(output.result).toEqual({ "number of rows deleted": 3 });
+    expect(output.count).toBeUndefined();
   });
 
   it("rejects unknown flags before touching the connection", async () => {

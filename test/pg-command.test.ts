@@ -185,9 +185,11 @@ describe("pg sample", () => {
 });
 
 describe("pg query", () => {
-  it("rejects write SQL before touching the connection", async () => {
-    await expect(pgCommand.run(["query", "DELETE FROM orders"])).rejects.toMatchObject({ code: "READ_ONLY" });
-    expect(runPgQuery).not.toHaveBeenCalled();
+  it("reads without requiring a grant", async () => {
+    runPgQuery.mockResolvedValueOnce({ rows: [{ n: "1" }], complete: true, numericColumns: new Set(["n"]) });
+    await pgCommand.run(["query", "SELECT 1 AS n"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(runPgWrite).not.toHaveBeenCalled();
   });
 
   it("passes limit and timeout and reports a definitive complete count", async () => {
@@ -226,32 +228,40 @@ describe("pg query", () => {
     });
     expect(runPgQuery).not.toHaveBeenCalled();
   });
-});
 
-describe("pg exec", () => {
-  it("requires the pg.write grant before touching the connection", async () => {
+  it("requires the pg.write grant for a write, before touching the connection", async () => {
     requireGrant.mockImplementation(() => {
       throw new AxiError("Write capability 'pg.write' is not granted", "WRITE_NOT_ALLOWED", []);
     });
-    await expect(pgCommand.run(["exec", "DELETE FROM orders WHERE id = 1"])).rejects.toMatchObject({
+    await expect(pgCommand.run(["query", "DELETE FROM orders WHERE id = 1"])).rejects.toMatchObject({
       code: "WRITE_NOT_ALLOWED",
     });
     expect(requireGrant).toHaveBeenCalledWith("pg.write");
     expect(runPgWrite).not.toHaveBeenCalled();
+    expect(runPgQuery).not.toHaveBeenCalled();
   });
 
-  it("runs a DML statement and reports the affected count", async () => {
+  it("runs a granted DML write and reports the affected count", async () => {
     runPgWrite.mockResolvedValueOnce({ command: "UPDATE", rowCount: 3, rows: [], numericColumns: new Set() });
-    const output = (await pgCommand.run(["exec", "UPDATE orders SET status = 'shipped' WHERE id < 4"])) as Record<
+    const output = (await pgCommand.run(["query", "UPDATE orders SET status = 'shipped' WHERE id < 4"])) as Record<
       string,
       unknown
     >;
+    expect(requireGrant).toHaveBeenCalledWith("pg.write");
     expect(runPgWrite.mock.calls[0][0]).toBe("UPDATE orders SET status = 'shipped' WHERE id < 4");
     expect(runPgWrite.mock.calls[0][1]).toEqual({ timeoutSeconds: 60 });
     expect(output.command).toBe("UPDATE");
     expect(output.affected).toBe(3);
     expect(output.returned).toBeUndefined();
     expect(output.elapsed).toMatch(/s$/);
+  });
+
+  it("runs a non-DML write like ANALYZE once granted", async () => {
+    runPgWrite.mockResolvedValueOnce({ command: "ANALYZE", rowCount: null, rows: [], numericColumns: new Set() });
+    const output = (await pgCommand.run(["query", "ANALYZE interco.interco_ar_ap_doc"])) as Record<string, unknown>;
+    expect(requireGrant).toHaveBeenCalledWith("pg.write");
+    expect(output.command).toBe("ANALYZE");
+    expect(output.affected).toBeUndefined();
   });
 
   it("shows RETURNING rows and coerces numeric columns", async () => {
@@ -262,45 +272,20 @@ describe("pg exec", () => {
       numericColumns: new Set(["id"]),
     });
     const output = (await pgCommand.run([
-      "exec",
+      "query",
       "INSERT INTO tags (name) VALUES ('urgent') RETURNING id, name",
     ])) as Record<string, unknown>;
     expect(output.affected).toBe(1);
     expect(output.returned).toEqual([{ id: 7, name: "urgent" }]);
   });
-
-  it("omits the affected count for DDL that reports none", async () => {
-    runPgWrite.mockResolvedValueOnce({ command: "CREATE", rowCount: null, rows: [], numericColumns: new Set() });
-    const output = (await pgCommand.run(["exec", "CREATE TABLE t (a int)"])) as Record<string, unknown>;
-    expect(output.command).toBe("CREATE");
-    expect(output.affected).toBeUndefined();
-  });
-
-  it("rejects a read statement before connecting, pointing at pg query", async () => {
-    await expect(pgCommand.run(["exec", "SELECT 1"])).rejects.toMatchObject({
-      code: "VALIDATION_ERROR",
-      message: expect.stringContaining("read statement"),
-    });
-    expect(runPgWrite).not.toHaveBeenCalled();
-  });
-
-  it("rejects an unsupported write statement", async () => {
-    await expect(pgCommand.run(["exec", "VACUUM orders"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-    expect(runPgWrite).not.toHaveBeenCalled();
-  });
-
-  it("fails loud when no SQL is provided", async () => {
-    await expect(pgCommand.run(["exec"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
-    expect(runPgWrite).not.toHaveBeenCalled();
-  });
 });
 
 describe("pg verb hints", () => {
-  it("redirects write verbs to pg exec instead of misparsing them", async () => {
+  it("redirects write verbs to pg query instead of misparsing them", async () => {
     await expect(pgCommand.run(["insert", "into", "t"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
       message: "'insert' is not a pg subcommand",
-      suggestions: expect.arrayContaining([expect.stringContaining("pg exec")]),
+      suggestions: expect.arrayContaining([expect.stringContaining("pg query")]),
     });
     expect(runPgQuery).not.toHaveBeenCalled();
   });

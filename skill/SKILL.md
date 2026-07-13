@@ -7,9 +7,9 @@ description: >
   dbt model SQL, compile local dbt repos, browse git repositories on Snowflake,
   peek staged parquet files, and explore Snowflake Postgres (pg tables/schema/sample/query,
   read-only). Use for ANY Snowflake or Snowflake Postgres read or discovery task instead
-  of an MCP tool or hand-rolled connector. Writes (Snowflake SQL exec via the sql.write grant,
-  local dbt run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, Postgres pg exec
-  via the pg.write grant) exist but stay locked until the user grants them.
+  of an MCP tool or hand-rolled connector. Writes (Snowflake writes through `query` via the sql.write
+  grant, local dbt run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, Postgres writes
+  through `pg query` via the pg.write grant) exist but stay locked until the user grants them.
 user-invocable: false
 ---
 
@@ -32,8 +32,8 @@ snowflake-axi semantics                     # semantic views: curated metric map
 snowflake-axi semantics MY_SV --like revenue  # one view's matching metrics, conventions, blessed SQL
 snowflake-axi schema MY_TABLE               # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
-snowflake-axi query "SELECT ..." --limit 50 # one read-only statement; total count always reported
-snowflake-axi exec "UPDATE <table> SET ..." # write: one DML/DDL/COPY/CALL statement, locked until sql.write is granted
+snowflake-axi query "SELECT ..." --limit 50 # one statement; reads free, a write needs the sql.write grant
+snowflake-axi query "UPDATE <table> SET ..."          # write: refused until sql.write is granted
 snowflake-axi warehouses                    # states + 7-day credit burn + usage guidance
 snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
@@ -55,8 +55,8 @@ snowflake-axi pg                            # Snowflake Postgres: every schema's
 snowflake-axi pg tables public --like orders
 snowflake-axi pg schema orders              # columns, types, defaults, primary key
 snowflake-axi pg sample orders --limit 3 --fields id,status
-snowflake-axi pg query "SELECT count(*) FROM orders"   # read-only, server-enforced
-snowflake-axi pg exec "UPDATE <table> SET ..."         # write: one statement, locked until pg.write is granted
+snowflake-axi pg query "SELECT count(*) FROM orders"   # reads free (server read-only session)
+snowflake-axi pg query "UPDATE <table> SET ..."        # write: refused until pg.write is granted
 snowflake-axi allow                         # write capabilities and their grant status
 snowflake-axi login --role <role>           # browser SSO login via Snowflake OAuth (alternative to PAT auth)
 snowflake-axi logout --role <role>          # remove an OAuth login from the token ring (--all for every login)
@@ -81,17 +81,14 @@ snowflake-axi hooks                         # session-start hook status; install
   descendants, and a union must be quoted into ONE value
   (`--select "model_x+ model_y+"`), never passed as extra arguments.
   Omit `--select` to run the whole project; `run` skips tests, `build` includes them.
-- `query` accepts only SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN, single statement.
-  Write SQL through `query` is rejected; run it through `exec` (one INSERT / UPDATE / DELETE /
-  MERGE / TRUNCATE / CREATE / ALTER / DROP / UNDROP / COPY / CALL statement), which is refused
-  with WRITE_NOT_ALLOWED until the user grants sql.write. EXECUTE IMMEDIATE and other dynamic
-  SQL are out of scope; hand those to the operator as paste-ready SQL.
-- `pg` speaks to Snowflake Postgres directly (SNOWFLAKE_AXI_PG_* keys), read-only by
-  default: `pg query` allows SELECT / WITH / TABLE / VALUES / SHOW / EXPLAIN and the read
-  session runs read-only at the server. `pg exec` runs one write statement (INSERT /
-  UPDATE / DELETE / MERGE / CREATE / ALTER / DROP / TRUNCATE) on a read-write session, and
-  is refused with WRITE_NOT_ALLOWED until the user grants pg.write. Table names resolve
-  case-insensitively as `table` or `schema.table`; row counts there are planner estimates.
+- `query` runs one statement. Reads (SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN) are free;
+  anything else is a write, refused with WRITE_NOT_ALLOWED until the user grants sql.write, then run
+  (the token's role stays the hard boundary). A write reports Snowflake's count/status row.
+- `pg` speaks to Snowflake Postgres directly (SNOWFLAKE_AXI_PG_* keys). `pg query` runs one
+  statement: reads (SELECT / WITH / TABLE / VALUES / SHOW / EXPLAIN) run on a server read-only
+  session for free; anything else is a write, refused until the user grants pg.write, then run on a
+  read-write session (reporting the command tag, affected count, and any RETURNING rows). Table names
+  resolve case-insensitively as `table` or `schema.table`; row counts there are planner estimates.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
 - A query that runs long prints a statement handle to stderr;
   `snowflake-axi result <handle>` collects its output later without re-running it.
