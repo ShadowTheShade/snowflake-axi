@@ -4,18 +4,22 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { parse as parseYaml } from "yaml";
-import { envFilePath, loadConfig } from "./config.js";
+import { type AuthMode, envFilePath, loadConfig } from "./config.js";
+import { refreshedAccessToken } from "./oauth.js";
 
 /**
  * Local dbt: spawns the dbt CLI against the project in the working directory,
  * injecting the tool's credentials into an ephemeral profile so a repo can
  * keep its committed profiles.yml credential-less (the dbt Projects on
  * Snowflake layout, where the server session supplies auth the same way).
- * The token itself never touches disk: the generated profile references an
- * env var that only the dbt subprocess receives.
+ * The credential itself never touches disk: the generated profile references
+ * an env var that only the dbt subprocess receives - the PAT as dbt's
+ * password, or under OAuth a freshly refreshed access token via dbt's native
+ * `authenticator: oauth`.
  */
 
 export const DBT_PASSWORD_ENV = "SNOWFLAKE_AXI_DBT_PASSWORD";
+export const DBT_TOKEN_ENV = "SNOWFLAKE_AXI_DBT_TOKEN";
 
 // Everything that authenticates a dbt-snowflake target; the ephemeral profile
 // replaces these wholesale so local runs always use the tool's identity.
@@ -160,8 +164,19 @@ export function buildEphemeralProfile(
   targetName: string,
   output: Record<string, unknown>,
   identity: { account: string; user: string },
+  auth: AuthMode = "pat",
 ): Record<string, unknown> {
   const carried = Object.fromEntries(Object.entries(output).filter(([key]) => !AUTH_FIELDS.has(key)));
+  // OAuth access tokens live ~10 minutes: connections opened while it is
+  // valid outlast it, so reuse them unless the repo profile says otherwise.
+  const credential =
+    auth === "oauth"
+      ? {
+          authenticator: "oauth",
+          token: `{{ env_var('${DBT_TOKEN_ENV}') }}`,
+          reuse_connections: carried.reuse_connections ?? true,
+        }
+      : { password: `{{ env_var('${DBT_PASSWORD_ENV}') }}` };
   return {
     [profileName]: {
       target: targetName,
@@ -171,7 +186,7 @@ export function buildEphemeralProfile(
           type: "snowflake",
           account: identity.account,
           user: identity.user,
-          password: `{{ env_var('${DBT_PASSWORD_ENV}') }}`,
+          ...credential,
         },
       },
     },
@@ -274,24 +289,17 @@ function statusCounts(rows: NodeRow[]): string {
 
 function errorLines(tail: string[]): string[] {
   const cleaned = tail.map((line) => line.replace(/^\d{2}:\d{2}:\d{2}\s+/, "").trim()).filter(Boolean);
-  const errors = cleaned.filter((line) => /error/i.test(line));
+  const errors = cleaned.filter((line) => /error|fail/i.test(line));
   const picked = (errors.length > 0 ? errors : cleaned).slice(-8);
   return picked.length > 0 ? picked : ["dbt produced no output; run dbt manually in the project to inspect"];
 }
 
 export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<string, unknown>> {
   const config = loadConfig();
-  // The ephemeral profile authenticates dbt with the PAT as its password; an
-  // OAuth access token is not a password and dies mid-run anyway (~600s).
-  if (config.auth === "oauth") {
-    throw new AxiError("Local dbt verbs need PAT auth; the active auth mode is OAuth", "CONFIG_ERROR", [
-      "Set SNOWFLAKE_AUTH=pat with SNOWFLAKE_USER and SNOWFLAKE_TOKEN in the env file for dbt runs",
-    ]);
-  }
   const project = resolveProject(options.projectDir);
   const outputs = loadOutputs(project);
   const targetName = resolveTarget(outputs, options.target, config.dbtTarget);
-  const profile = buildEphemeralProfile(project.profileName, targetName, outputs[targetName], config);
+  const profile = buildEphemeralProfile(project.profileName, targetName, outputs[targetName], config, config.auth);
 
   const profilesDir = mkdtempSync(join(tmpdir(), "snowflake-axi-dbt-"));
   const argv = ["--no-use-colors", options.verb, "--profiles-dir", profilesDir, "--project-dir", project.dir];
@@ -305,7 +313,11 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   let exit: DbtExit;
   try {
     writeFileSync(join(profilesDir, "profiles.yml"), `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
-    exit = await runDbt(argv, { ...process.env, [DBT_PASSWORD_ENV]: config.token }, options.timeoutSeconds);
+    const credentialEnv =
+      config.auth === "oauth"
+        ? { [DBT_TOKEN_ENV]: await refreshedAccessToken() }
+        : { [DBT_PASSWORD_ENV]: config.token };
+    exit = await runDbt(argv, { ...process.env, ...credentialEnv }, options.timeoutSeconds);
   } finally {
     rmSync(profilesDir, { recursive: true, force: true });
   }
@@ -326,11 +338,16 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
     );
   }
   if (exit.code !== 0) {
-    throw new AxiError(
-      `${command} on ${project.name} failed before producing results`,
-      "DBT_ERROR",
-      errorLines(exit.tail),
-    );
+    const roleHint =
+      config.auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
+        ? [
+            "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
+          ]
+        : [];
+    throw new AxiError(`${command} on ${project.name} failed before producing results`, "DBT_ERROR", [
+      ...errorLines(exit.tail),
+      ...roleHint,
+    ]);
   }
 
   const base = { project: project.name, target: targetName, command };

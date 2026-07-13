@@ -6,14 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 
 const loadConfig = vi.hoisted(() => vi.fn());
+const refreshedAccessToken = vi.hoisted(() => vi.fn());
 vi.mock("../src/config.js", () => ({
   loadConfig,
   envFilePath: () => "/home/user/.config/snowflake-axi/env",
 }));
+vi.mock("../src/oauth.js", () => ({ refreshedAccessToken }));
 
 import {
   buildEphemeralProfile,
   DBT_PASSWORD_ENV,
+  DBT_TOKEN_ENV,
   loadOutputs,
   resolveProject,
   resolveTarget,
@@ -26,7 +29,15 @@ const originalPath = process.env.PATH;
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "axi-dbt-local-"));
   loadConfig.mockReset();
-  loadConfig.mockReturnValue({ account: "MYACCT", user: "SVC_USER", token: "sekret-token", dbtTarget: undefined });
+  loadConfig.mockReturnValue({
+    account: "MYACCT",
+    user: "SVC_USER",
+    auth: "pat",
+    token: "sekret-token",
+    dbtTarget: undefined,
+  });
+  refreshedAccessToken.mockReset();
+  refreshedAccessToken.mockResolvedValue("fresh-access-token");
 });
 
 afterEach(() => {
@@ -150,6 +161,30 @@ describe("buildEphemeralProfile", () => {
     expect(target.role).toBe("OTHER_ROLE");
     expect(target.warehouse).toBe("{{ env_var('WH', 'DEV_WH') }}");
   });
+
+  it("authenticates with an OAuth access token in oauth mode, reusing connections", () => {
+    writeProjectFiles(PROFILES);
+    const outputs = loadOutputs(resolveProject(dir));
+    const profile = buildEphemeralProfile("demo", "dev", outputs.dev, { account: "MYACCT", user: "ME" }, "oauth");
+    const target = (profile.demo as { outputs: Record<string, Record<string, unknown>> }).outputs.dev;
+    expect(target.authenticator).toBe("oauth");
+    expect(target.token).toBe(`{{ env_var('${DBT_TOKEN_ENV}') }}`);
+    expect(target.password).toBeUndefined();
+    expect(target.reuse_connections).toBe(true);
+    expect(target.role).toBe("MY_ROLE");
+  });
+
+  it("keeps the repo profile's explicit reuse_connections in oauth mode", () => {
+    const profile = buildEphemeralProfile(
+      "demo",
+      "dev",
+      { type: "snowflake", reuse_connections: false },
+      { account: "MYACCT", user: "ME" },
+      "oauth",
+    );
+    const target = (profile.demo as { outputs: Record<string, Record<string, unknown>> }).outputs.dev;
+    expect(target.reuse_connections).toBe(false);
+  });
 });
 
 /** Installs a fake `dbt` on PATH; capture lands in $FAKE_CAPTURE. */
@@ -163,6 +198,7 @@ function installShim(script: string): string {
     `#!/bin/sh
 printf '%s\\n' "$@" > "$FAKE_CAPTURE/argv.txt"
 printf '%s' "$${DBT_PASSWORD_ENV}" > "$FAKE_CAPTURE/password.txt"
+printf '%s' "$${DBT_TOKEN_ENV}" > "$FAKE_CAPTURE/token.txt"
 while [ $# -gt 0 ]; do
   if [ "$1" = "--profiles-dir" ]; then
     printf '%s' "$2" > "$FAKE_CAPTURE/profiles_dir.txt"
@@ -294,6 +330,36 @@ exit 2`);
     await expect(promise).rejects.toMatchObject({
       code: "CONFIG_ERROR",
       suggestions: [expect.stringContaining("uv tool install dbt-core")],
+    });
+  });
+
+  it("runs under OAuth with a freshly refreshed access token", async () => {
+    loadConfig.mockReturnValue({ account: "MYACCT", user: "ANTHONYG", auth: "oauth", dbtTarget: undefined });
+    writeProjectFiles(PROFILES);
+    const capture = shimWritingResults(runResults([{ id: "model.demo.stg_flavors", status: "success" }]), 0);
+
+    const output = await runLocalDbt({ verb: "build", projectDir: dir, target: "dev", timeoutSeconds: 30 });
+    expect(output.count).toBe("1 nodes (1 success)");
+    expect(refreshedAccessToken).toHaveBeenCalledTimes(1);
+
+    const written = parseYaml(readFileSync(join(capture, "profile.yml"), "utf8")) as Record<string, unknown>;
+    const target = (written.demo as { outputs: Record<string, Record<string, unknown>> }).outputs.dev;
+    expect(target.authenticator).toBe("oauth");
+    expect(target.token).toBe(`{{ env_var('${DBT_TOKEN_ENV}') }}`);
+    expect(readFileSync(join(capture, "profile.yml"), "utf8")).not.toContain("fresh-access-token");
+    expect(readFileSync(join(capture, "token.txt"), "utf8")).toBe("fresh-access-token");
+  });
+
+  it("hints at login --role when an OAuth run fails on a role error", async () => {
+    loadConfig.mockReturnValue({ account: "MYACCT", user: "ANTHONYG", auth: "oauth", dbtTarget: undefined });
+    writeProjectFiles(PROFILES);
+    installShim(`echo "Role 'MY_ROLE' specified in the connect string is not granted to this user"
+exit 2`);
+
+    const promise = runLocalDbt({ verb: "compile", projectDir: dir, target: "dev", timeoutSeconds: 30 });
+    await expect(promise).rejects.toMatchObject({
+      code: "DBT_ERROR",
+      suggestions: expect.arrayContaining([expect.stringContaining("login --role")]),
     });
   });
 

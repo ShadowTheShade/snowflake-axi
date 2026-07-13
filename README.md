@@ -134,7 +134,9 @@ Constraints worth knowing:
 - Secondary roles follow the integration's `OAUTH_USE_SECONDARY_ROLES`: the default `NONE` suppresses them entirely, `IMPLICIT` (above) activates the user's `DEFAULT_SECONDARY_ROLES` at session start (both verified live).
   With `IMPLICIT` and `DEFAULT_SECONDARY_ROLES = ('ALL')` the session carries the privilege union of every granted role - including admin roles the user holds, since the blocked-roles list only guards the primary role.
 - Snowflake blocks ACCOUNTADMIN and SECURITYADMIN as the primary role over OAuth by default.
-- Local dbt verbs still need a PAT: dbt authenticates with the token as a password, which OAuth access tokens are not.
+- Local dbt verbs work under OAuth: the ephemeral profile uses dbt's native `authenticator: oauth` with a freshly refreshed access token.
+  The session runs as the token's pinned role, so the target's `role:` must match it (`login --role <builder role>` first).
+  Access tokens live ~10 minutes; connections opened while it is valid keep working, and the profile defaults `reuse_connections: true` so long runs ride them.
 - The refresh token on disk is a long-lived credential; the file is 0600 and should be treated like a PAT.
 
 ## Read-only by default, writes by consent
