@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -140,6 +140,96 @@ describe("loadPgConfig", () => {
       code: "CONFIG_ERROR",
       message: expect.stringContaining("SNOWFLAKE_AXI_PG_SSLMODE"),
     });
+  });
+});
+
+describe("auth mode selection", () => {
+  function stubConfigHome(files: Record<string, string>): void {
+    const dir = mkdtempSync(join(tmpdir(), "axi-config-home-"));
+    mkdirSync(join(dir, "snowflake-axi"));
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(join(dir, "snowflake-axi", name), content);
+    }
+    vi.stubEnv("XDG_CONFIG_HOME", dir);
+    vi.stubEnv("SNOWFLAKE_HOME", "/nonexistent");
+  }
+
+  const tokenFile = JSON.stringify({
+    account: "OAUTH_ACC",
+    clientId: "cid",
+    user: "ALICE",
+    accessToken: "at",
+    accessTokenExpiresAt: 1,
+    refreshToken: "rt",
+    refreshTokenExpiresAt: 2,
+  });
+
+  it("defaults to PAT when no token file exists", async () => {
+    stubCreds();
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", token: "TOKEN" });
+  });
+
+  it("selects OAuth when a token file exists, taking identity from the login", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile });
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "oauth", account: "OAUTH_ACC", user: "ALICE", token: undefined });
+  });
+
+  it("lets SNOWFLAKE_AUTH=pat force PAT past an existing token file", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile });
+    vi.stubEnv("SNOWFLAKE_AUTH", "pat");
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", account: "ACC", token: "TOKEN" });
+  });
+
+  it("points SNOWFLAKE_AUTH=oauth without a login at the login command", async () => {
+    stubIsolation();
+    vi.stubEnv("SNOWFLAKE_AUTH", "oauth");
+    const loadConfig = await freshLoadConfig();
+    expect(loadError(loadConfig)).toMatchObject({
+      code: "CONFIG_ERROR",
+      suggestions: ["Run `snowflake-axi login` to sign in with the browser"],
+    });
+  });
+
+  it("rejects an unknown SNOWFLAKE_AUTH value", async () => {
+    stubCreds();
+    vi.stubEnv("SNOWFLAKE_AUTH", "keypair");
+    const loadConfig = await freshLoadConfig();
+    expect(loadError(loadConfig)).toMatchObject({
+      code: "CONFIG_ERROR",
+      message: expect.stringContaining("SNOWFLAKE_AUTH"),
+    });
+  });
+});
+
+describe("oauthLoginSettings", () => {
+  async function freshLoginSettings() {
+    vi.resetModules();
+    const { oauthLoginSettings } = await import("../src/config.js");
+    return oauthLoginSettings;
+  }
+
+  it("reports missing account and client id with CONFIG_ERROR", async () => {
+    stubIsolation();
+    const oauthLoginSettings = await freshLoginSettings();
+    expect(loadError(oauthLoginSettings)).toMatchObject({
+      code: "CONFIG_ERROR",
+      message: expect.stringContaining("SNOWFLAKE_OAUTH_CLIENT_ID"),
+    });
+  });
+
+  it("returns account, client id, and the optional role scope", async () => {
+    stubIsolation();
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_OAUTH_CLIENT_ID", "cid");
+    vi.stubEnv("SNOWFLAKE_OAUTH_ROLE_SCOPE", "REPORTER");
+    const oauthLoginSettings = await freshLoginSettings();
+    expect(oauthLoginSettings()).toEqual({ account: "ACC", clientId: "cid", roleScope: "REPORTER" });
   });
 });
 

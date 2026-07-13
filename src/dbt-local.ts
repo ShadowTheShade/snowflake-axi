@@ -281,6 +281,13 @@ function errorLines(tail: string[]): string[] {
 
 export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<string, unknown>> {
   const config = loadConfig();
+  // The ephemeral profile authenticates dbt with the PAT as its password; an
+  // OAuth access token is not a password and dies mid-run anyway (~600s).
+  if (config.auth === "oauth") {
+    throw new AxiError("Local dbt verbs need PAT auth; the active auth mode is OAuth", "CONFIG_ERROR", [
+      "Set SNOWFLAKE_AUTH=pat with SNOWFLAKE_USER and SNOWFLAKE_TOKEN in the env file for dbt runs",
+    ]);
+  }
   const project = resolveProject(options.projectDir);
   const outputs = loadOutputs(project);
   const targetName = resolveTarget(outputs, options.target, config.dbtTarget);

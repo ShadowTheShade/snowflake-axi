@@ -8,6 +8,7 @@ import { findCommand } from "./commands/find.js";
 import { gitCommand } from "./commands/git.js";
 import { homeView } from "./commands/home.js";
 import { hooksCommand } from "./commands/hooks.js";
+import { loginCommand } from "./commands/login.js";
 import { modelCommand } from "./commands/model.js";
 import { pgCommand } from "./commands/pg.js";
 import { queryCommand } from "./commands/query.js";
@@ -37,6 +38,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   git: gitCommand,
   stage: stageCommand,
   pg: pgCommand,
+  login: loginCommand,
   allow: allowCommand,
   context: contextCommand,
   hooks: hooksCommand,

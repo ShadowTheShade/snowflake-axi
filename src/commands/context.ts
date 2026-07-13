@@ -1,5 +1,5 @@
 import { defineCommand } from "../command.js";
-import { loadConfig, loadPgConfig } from "../config.js";
+import { loadConfig, loadPgConfig, readOAuthTokens } from "../config.js";
 
 function pgLine(): string | undefined {
   try {
@@ -24,10 +24,18 @@ export const contextCommand = defineCommand("context", {
         return "";
       }
       const pg = pgLine();
+      const refreshExpires = config.auth === "oauth" ? readOAuthTokens()?.refreshTokenExpiresAt : undefined;
+      const auth =
+        config.auth === "oauth"
+          ? `OAuth, logged in as ${config.user}${
+              refreshExpires !== undefined ? `, expires ${new Date(refreshExpires).toISOString().slice(0, 10)}` : ""
+            }`
+          : "PAT";
       return {
         tool: "snowflake-axi: read-only Snowflake explorer on PATH",
         account: config.account,
         user: config.user,
+        auth,
         ...(pg !== undefined ? { pg } : {}),
         help: ["Run `snowflake-axi` for live connection context and readable databases"],
       };

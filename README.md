@@ -42,7 +42,7 @@ Until published, install with `npm install && npm run build && npm link` from a 
 ## Configuration
 
 Credentials live in `~/.config/snowflake-axi/env` (process env overrides file values, never commit this file).
-Three values are required:
+Three values are required for PAT auth (or skip the PAT entirely with browser SSO; see [Browser SSO login](#browser-sso-login-oauth)):
 
 ```
 SNOWFLAKE_ACCOUNT=<account identifier>
@@ -90,6 +90,49 @@ The connection is selected the way snow selects it (`SNOWFLAKE_DEFAULT_CONNECTIO
 Only PAT connections are usable: a `token` with `authenticator = "PROGRAMMATIC_ACCESS_TOKEN"`, or a `password` field that holds a PAT.
 Real passwords do not work (statements run over the SQL API, which takes the PAT as a bearer token); browser, SSO, OAuth, and key-pair connections are ignored.
 If you already use the snow CLI, snowflake-axi needs no configuration of its own.
+
+## Browser SSO login (OAuth)
+
+`snowflake-axi login` is an alternative to the PAT: one browser login under your own identity (delegating to the account's SSO IdP when one is configured), then silent token refresh for up to 90 days.
+It runs Snowflake's built-in OAuth authorization-code flow with PKCE as a public client, so no client secret ships in the tool.
+
+One-time admin setup:
+
+```sql
+CREATE SECURITY INTEGRATION AXI_OAUTH
+  TYPE = OAUTH
+  OAUTH_CLIENT = CUSTOM
+  OAUTH_CLIENT_TYPE = 'PUBLIC'
+  OAUTH_REDIRECT_URI = 'http://localhost:8976/callback'
+  OAUTH_ALLOW_NON_TLS_REDIRECT_URI = TRUE  -- loopback redirect never leaves the machine (RFC 8252)
+  OAUTH_ISSUE_REFRESH_TOKENS = TRUE
+  OAUTH_REFRESH_TOKEN_VALIDITY = 7776000
+  ENABLED = TRUE;
+
+SELECT SYSTEM$SHOW_OAUTH_CLIENT_SECRETS('AXI_OAUTH');  -- OAUTH_CLIENT_ID
+```
+
+Each user then adds to the env file:
+
+```
+SNOWFLAKE_ACCOUNT=<account identifier>
+SNOWFLAKE_OAUTH_CLIENT_ID=<from SYSTEM$SHOW_OAUTH_CLIENT_SECRETS>
+SNOWFLAKE_OAUTH_ROLE_SCOPE=<optional: pin a session role at login>
+```
+
+and runs `snowflake-axi login`.
+The browser opens the account's authorize page (headless machines get the URL printed to paste elsewhere), and the tokens land in `~/.config/snowflake-axi/oauth-tokens.json` with mode 0600.
+The presence of that file makes OAuth the active auth mode; `SNOWFLAKE_AUTH=pat` forces PAT again without deleting it, and `SNOWFLAKE_AUTH=oauth` insists on OAuth.
+
+Access tokens live about ten minutes and refresh silently before each request that needs it; when the refresh token itself expires (default 90 days) or is revoked, commands fail with a clear instruction to run `snowflake-axi login` again.
+
+Constraints worth knowing:
+
+- Every OAuth session is pinned to the token's role: the user's default role, or the one from `login --role <name>` / `SNOWFLAKE_OAUTH_ROLE_SCOPE` (`session:role:<name>` is the only session scope Snowflake's built-in OAuth accepts).
+  Switching roles means logging in again; per-query `--role` only works with PAT auth.
+- Snowflake blocks ACCOUNTADMIN and SECURITYADMIN sessions over OAuth by default.
+- Local dbt verbs still need a PAT: dbt authenticates with the token as a password, which OAuth access tokens are not.
+- The refresh token on disk is a long-lived credential; the file is 0600 and should be treated like a PAT.
 
 ## Read-only by default, writes by consent
 

@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AxiError } from "axi-sdk-js";
@@ -6,10 +6,14 @@ import { parse as parseToml } from "smol-toml";
 
 export const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_$]*$/;
 
+export type AuthMode = "pat" | "oauth";
+
 export interface Config {
   account: string;
   user: string;
-  token: string;
+  auth: AuthMode;
+  /** PAT bearer token; unset in OAuth mode, where oauth.ts supplies the access token. */
+  token?: string;
   role?: string;
   database?: string;
   schema?: string;
@@ -25,6 +29,42 @@ export function configDir(): string {
 
 export function envFilePath(): string {
   return join(configDir(), "env");
+}
+
+export function accountUrl(account: string): string {
+  return `https://${account.replace(/_/g, "-")}.snowflakecomputing.com`;
+}
+
+export function oauthTokenPath(): string {
+  return join(configDir(), "oauth-tokens.json");
+}
+
+/** Tokens from `snowflake-axi login`; timestamps are epoch milliseconds. */
+export interface OAuthTokens {
+  account: string;
+  clientId: string;
+  user: string;
+  accessToken: string;
+  accessTokenExpiresAt: number;
+  refreshToken: string;
+  refreshTokenExpiresAt: number;
+  roleScope?: string;
+}
+
+export function readOAuthTokens(): OAuthTokens | undefined {
+  try {
+    return JSON.parse(readFileSync(oauthTokenPath(), "utf8")) as OAuthTokens;
+  } catch {
+    return undefined;
+  }
+}
+
+// The refresh token is a long-lived credential, so the file must stay 0600;
+// chmod covers overwrites, where writeFileSync ignores the mode.
+export function writeOAuthTokens(tokens: OAuthTokens): void {
+  mkdirSync(configDir(), { recursive: true });
+  writeFileSync(oauthTokenPath(), `${JSON.stringify(tokens, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(oauthTokenPath(), 0o600);
 }
 
 function parseEnvFile(path: string): Record<string, string> {
@@ -164,27 +204,63 @@ export function loadPgConfig(): PgConfig {
 
 let cached: Config | undefined;
 
+/**
+ * OAuth is selected by an explicit SNOWFLAKE_AUTH, or by a token file left by
+ * `snowflake-axi login`; PAT remains the default otherwise, so existing
+ * setups are untouched.
+ */
+function resolveAuthMode(explicit: string | undefined, tokens: OAuthTokens | undefined): AuthMode {
+  const mode = explicit?.toLowerCase();
+  if (mode !== undefined && mode !== "pat" && mode !== "oauth") {
+    throw new AxiError(`Invalid SNOWFLAKE_AUTH '${explicit}'`, "CONFIG_ERROR", [
+      `Fix SNOWFLAKE_AUTH in ${envFilePath()}: pat or oauth`,
+    ]);
+  }
+  return mode ?? (tokens ? "oauth" : "pat");
+}
+
 export function loadConfig(): Config {
   if (cached) return cached;
   const file = parseEnvFile(envFilePath());
   const toml = snowCliConnection();
   const get = (key: string) => process.env[key] || file[key] || toml[key] || undefined;
-  const account = get("SNOWFLAKE_ACCOUNT");
-  const user = get("SNOWFLAKE_USER");
-  const token = get("SNOWFLAKE_TOKEN");
-  if (!account || !user || !token) {
-    const missing = [
-      ["SNOWFLAKE_ACCOUNT", account],
-      ["SNOWFLAKE_USER", user],
-      ["SNOWFLAKE_TOKEN", token],
-    ]
-      .filter(([, value]) => !value)
-      .map(([key]) => key);
-    throw new AxiError(`Missing Snowflake credentials: ${missing.join(", ")}`, "CONFIG_ERROR", [
-      `Create ${envFilePath()} with SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_TOKEN (PAT)`,
-      "Or add a PAT connection to ~/.snowflake/connections.toml (shared with the snow CLI)",
-      "Optional keys: SNOWFLAKE_ROLE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA",
-    ]);
+
+  const tokens = readOAuthTokens();
+  const auth = resolveAuthMode(get("SNOWFLAKE_AUTH"), tokens);
+  let account: string;
+  let user: string;
+  let token: string | undefined;
+  if (auth === "oauth") {
+    if (!tokens) {
+      throw new AxiError("SNOWFLAKE_AUTH=oauth but no OAuth login was found", "CONFIG_ERROR", [
+        "Run `snowflake-axi login` to sign in with the browser",
+      ]);
+    }
+    // The login owns identity in OAuth mode: the token was minted for that
+    // account and user, so env values cannot retarget it.
+    account = tokens.account;
+    user = tokens.user;
+  } else {
+    const envAccount = get("SNOWFLAKE_ACCOUNT");
+    const envUser = get("SNOWFLAKE_USER");
+    token = get("SNOWFLAKE_TOKEN");
+    if (!envAccount || !envUser || !token) {
+      const missing = [
+        ["SNOWFLAKE_ACCOUNT", envAccount],
+        ["SNOWFLAKE_USER", envUser],
+        ["SNOWFLAKE_TOKEN", token],
+      ]
+        .filter(([, value]) => !value)
+        .map(([key]) => key);
+      throw new AxiError(`Missing Snowflake credentials: ${missing.join(", ")}`, "CONFIG_ERROR", [
+        `Create ${envFilePath()} with SNOWFLAKE_ACCOUNT, SNOWFLAKE_USER, SNOWFLAKE_TOKEN (PAT)`,
+        "Or add a PAT connection to ~/.snowflake/connections.toml (shared with the snow CLI)",
+        "Or run `snowflake-axi login` for browser SSO via Snowflake OAuth",
+        "Optional keys: SNOWFLAKE_ROLE, SNOWFLAKE_DATABASE, SNOWFLAKE_SCHEMA",
+      ]);
+    }
+    account = envAccount;
+    user = envUser;
   }
   for (const key of ["SNOWFLAKE_DATABASE", "SNOWFLAKE_SCHEMA"]) {
     const value = get(key);
@@ -197,6 +273,7 @@ export function loadConfig(): Config {
   cached = {
     account,
     user,
+    auth,
     token,
     role: get("SNOWFLAKE_ROLE"),
     database: get("SNOWFLAKE_DATABASE"),
@@ -206,4 +283,34 @@ export function loadConfig(): Config {
     dbtTarget: get("SNOWFLAKE_AXI_DBT_TARGET"),
   };
   return cached;
+}
+
+export interface OAuthLoginSettings {
+  account: string;
+  clientId: string;
+  roleScope?: string;
+}
+
+/**
+ * Settings `snowflake-axi login` needs before any token exists, so this
+ * cannot go through loadConfig (which requires working credentials).
+ */
+export function oauthLoginSettings(): OAuthLoginSettings {
+  const file = parseEnvFile(envFilePath());
+  const get = (key: string) => process.env[key] || file[key] || undefined;
+  const account = get("SNOWFLAKE_ACCOUNT");
+  const clientId = get("SNOWFLAKE_OAUTH_CLIENT_ID");
+  if (!account || !clientId) {
+    const missing = [
+      ["SNOWFLAKE_ACCOUNT", account],
+      ["SNOWFLAKE_OAUTH_CLIENT_ID", clientId],
+    ]
+      .filter(([, value]) => !value)
+      .map(([key]) => key);
+    throw new AxiError(`Missing OAuth login settings: ${missing.join(", ")}`, "CONFIG_ERROR", [
+      `Add ${missing.join(" and ")} to ${envFilePath()}`,
+      "The client id comes from SYSTEM$SHOW_OAUTH_CLIENT_SECRETS on the security integration; see the README's OAuth setup",
+    ]);
+  }
+  return { account, clientId, roleScope: get("SNOWFLAKE_OAUTH_ROLE_SCOPE") };
 }

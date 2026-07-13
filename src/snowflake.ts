@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { AxiError } from "axi-sdk-js";
-import { loadConfig } from "./config.js";
+import { accountUrl, loadConfig } from "./config.js";
+import { currentAccessToken, refreshedAccessToken } from "./oauth.js";
 
 export interface QueryResult {
   rows: Record<string, unknown>[];
@@ -46,17 +47,31 @@ export interface RunningStatement {
   handle: string;
 }
 
-function requestContext(): { base: string; headers: Record<string, string> } {
+async function requestContext(): Promise<{ base: string; headers: Record<string, string> }> {
   const config = loadConfig();
+  const oauth = config.auth === "oauth";
   return {
-    base: `https://${config.account.replace(/_/g, "-")}.snowflakecomputing.com`,
+    base: accountUrl(config.account),
     headers: {
-      authorization: `Bearer ${config.token}`,
-      "x-snowflake-authorization-token-type": "PROGRAMMATIC_ACCESS_TOKEN",
+      authorization: `Bearer ${oauth ? await currentAccessToken() : (config.token ?? "")}`,
+      "x-snowflake-authorization-token-type": oauth ? "OAUTH" : "PROGRAMMATIC_ACCESS_TOKEN",
       "content-type": "application/json",
       "user-agent": "snowflake-axi",
     },
   };
+}
+
+// In OAuth mode a 401 usually means the access token died mid-flight (revoked
+// session, clock skew past the refresh margin): one forced refresh and one
+// retry recovers it; an expired refresh token surfaces as the re-login error.
+async function withAuthRetry<T>(run: () => Promise<T>): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    if (loadConfig().auth !== "oauth" || !(error instanceof AxiError) || error.code !== "AUTH_ERROR") throw error;
+    await refreshedAccessToken();
+    return run();
+  }
 }
 
 /**
@@ -69,7 +84,6 @@ function requestContext(): { base: string; headers: Record<string, string> } {
  */
 export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
-  const { base, headers } = requestContext();
   const body = JSON.stringify({
     statement: sqlText,
     role: options.role ?? config.role,
@@ -80,12 +94,15 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
     bindings: toBindings(options.binds),
   });
 
-  const response = await awaitResult(base, headers, await submit(base, headers, body));
-  const payload = await parsePayload(response);
-  if (!response.ok) {
-    throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
-  }
-  return collectResult(base, headers, payload, options.maxRows);
+  return withAuthRetry(async () => {
+    const { base, headers } = await requestContext();
+    const response = await awaitResult(base, headers, await submit(base, headers, body));
+    const payload = await parsePayload(response);
+    if (!response.ok) {
+      throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
+    }
+    return collectResult(base, headers, payload, options.maxRows);
+  });
 }
 
 /**
@@ -97,19 +114,21 @@ export async function fetchStatementResult(
   handle: string,
   options: { maxRows?: number } = {},
 ): Promise<QueryResult | RunningStatement> {
-  const { base, headers } = requestContext();
-  let response: Response;
-  try {
-    response = await fetch(`${base}/api/v2/statements/${handle}`, { headers });
-  } catch (err) {
-    throw translateError(0, err instanceof Error ? err.message : String(err));
-  }
-  if (response.status === 202) return { running: true, handle };
-  const payload = await parsePayload(response);
-  if (!response.ok) {
-    throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
-  }
-  return collectResult(base, headers, payload, options.maxRows);
+  return withAuthRetry(async () => {
+    const { base, headers } = await requestContext();
+    let response: Response;
+    try {
+      response = await fetch(`${base}/api/v2/statements/${handle}`, { headers });
+    } catch (err) {
+      throw translateError(0, err instanceof Error ? err.message : String(err));
+    }
+    if (response.status === 202) return { running: true, handle };
+    const payload = await parsePayload(response);
+    if (!response.ok) {
+      throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
+    }
+    return collectResult(base, headers, payload, options.maxRows);
+  });
 }
 
 async function collectResult(
@@ -218,10 +237,16 @@ function translateError(status: number, message: string): AxiError {
     );
   }
   if (status === 401 || status === 403 || /incorrect username or password|authentication/i.test(message)) {
-    return new AxiError("Snowflake authentication failed", "AUTH_ERROR", [
-      "Check SNOWFLAKE_USER and SNOWFLAKE_TOKEN (PAT) in the env file, and that the PAT has not expired",
-      "PAT auth also fails when this machine's egress IP is outside the user's network policy",
-    ]);
+    return new AxiError(
+      "Snowflake authentication failed",
+      "AUTH_ERROR",
+      loadConfig().auth === "oauth"
+        ? ["Run `snowflake-axi login` to sign in again"]
+        : [
+            "Check SNOWFLAKE_USER and SNOWFLAKE_TOKEN (PAT) in the env file, and that the PAT has not expired",
+            "PAT auth also fails when this machine's egress IP is outside the user's network policy",
+          ],
+    );
   }
   const compact = message.replace(/\s+/g, " ").trim();
   if (status === 408 || /statement or warehouse timeout/i.test(compact)) {
@@ -238,10 +263,19 @@ function translateError(status: number, message: string): AxiError {
     );
   }
   if (/role.*not granted to this user.*not permitted for the credentials/i.test(compact)) {
-    return new AxiError("Snowflake refused the requested role for this token", "SNOWFLAKE_ERROR", [
-      "The role must be granted to the service user: SHOW GRANTS TO USER <user>",
-      "A token minted with ROLE_RESTRICTION is pinned to that role; role switching needs a PAT minted without it",
-    ]);
+    return new AxiError(
+      "Snowflake refused the requested role for this token",
+      "SNOWFLAKE_ERROR",
+      loadConfig().auth === "oauth"
+        ? [
+            "OAuth sessions are pinned to the role in the token: the default role, or the one from `login --role`",
+            "Run `snowflake-axi login --role <name>` to switch; per-query --role only works with PAT auth",
+          ]
+        : [
+            "The role must be granted to the service user: SHOW GRANTS TO USER <user>",
+            "A token minted with ROLE_RESTRICTION is pinned to that role; role switching needs a PAT minted without it",
+          ],
+    );
   }
   if (/invalid identifier/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", ["Run `snowflake-axi schema <table>` to check the column names"]);
