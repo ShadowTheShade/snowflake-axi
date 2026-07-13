@@ -107,6 +107,7 @@ CREATE SECURITY INTEGRATION AXI_OAUTH
   OAUTH_ALLOW_NON_TLS_REDIRECT_URI = TRUE  -- loopback redirect never leaves the machine (RFC 8252)
   OAUTH_ISSUE_REFRESH_TOKENS = TRUE
   OAUTH_REFRESH_TOKEN_VALIDITY = 7776000
+  OAUTH_USE_SECONDARY_ROLES = IMPLICIT  -- activate the user's default secondary roles at session start
   ENABLED = TRUE;
 
 SELECT SYSTEM$SHOW_OAUTH_CLIENT_SECRETS('AXI_OAUTH');  -- OAUTH_CLIENT_ID
@@ -130,9 +131,9 @@ Constraints worth knowing:
 
 - Every OAuth session is pinned to the token's role: the user's default role, or the one from `login --role <name>` / `SNOWFLAKE_OAUTH_ROLE_SCOPE` (`session:role:<name>` is the only session scope Snowflake's built-in OAuth accepts).
   Switching roles means logging in again; per-query `--role` only works with PAT auth.
-- Secondary roles are suppressed too (verified live: `CURRENT_SECONDARY_ROLES()` is empty under OAuth even with `DEFAULT_SECONDARY_ROLES = ('ALL')` on the user).
-  An OAuth session is exactly the token's one role; role breadth needs a PAT.
-- Snowflake blocks ACCOUNTADMIN and SECURITYADMIN sessions over OAuth by default.
+- Secondary roles follow the integration's `OAUTH_USE_SECONDARY_ROLES`: the default `NONE` suppresses them entirely, `IMPLICIT` (above) activates the user's `DEFAULT_SECONDARY_ROLES` at session start (both verified live).
+  With `IMPLICIT` and `DEFAULT_SECONDARY_ROLES = ('ALL')` the session carries the privilege union of every granted role - including admin roles the user holds, since the blocked-roles list only guards the primary role.
+- Snowflake blocks ACCOUNTADMIN and SECURITYADMIN as the primary role over OAuth by default.
 - Local dbt verbs still need a PAT: dbt authenticates with the token as a password, which OAuth access tokens are not.
 - The refresh token on disk is a long-lived credential; the file is 0600 and should be treated like a PAT.
 
