@@ -125,19 +125,26 @@ and runs `snowflake-axi login`.
 The browser opens the account's authorize page (headless machines get the URL printed to paste elsewhere), and the tokens land in `~/.config/snowflake-axi/oauth-tokens.json` with mode 0600.
 The presence of that file makes OAuth the active auth mode; `SNOWFLAKE_AUTH=pat` forces PAT again without deleting it, and `SNOWFLAKE_AUTH=oauth` insists on OAuth.
 
-Access tokens live about ten minutes and refresh silently before each request that needs it; when the refresh token itself expires (default 90 days) or is revoked, commands fail with a clear instruction to run `snowflake-axi login` again.
+Every Snowflake OAuth token is pinned to exactly one role (`session:role:<name>` is the only session scope the built-in flow accepts), so the token file is a **ring** of independent logins keyed by role:
+
+- `login` adds the default-role login; `login --role <name>` adds that role's login, one browser consent each, every one refreshing silently for its own 90 days.
+- Per-query `--role <name>` selects the matching login from the ring; a role without one fails fast with the exact `login --role` command to run.
+- Without `--role`, the default login runs - or the only login, when a single role-pinned one exists.
+- `logout [--role <name> | --all]` removes logins; removing the last one deletes the file and the tool falls back to PAT.
+
+Access tokens live about ten minutes and refresh silently before each request that needs it; when a login's refresh token expires (default 90 days) or is revoked, commands fail with the exact login command to rerun.
 
 Constraints worth knowing:
 
-- Every OAuth session is pinned to the token's role: the user's default role, or the one from `login --role <name>` / `SNOWFLAKE_OAUTH_ROLE_SCOPE` (`session:role:<name>` is the only session scope Snowflake's built-in OAuth accepts).
-  Switching roles means logging in again; per-query `--role` only works with PAT auth.
+- In-session `USE ROLE` does not exist over the stateless SQL API, and Snowflake OAuth has no any-role scope: the ring is the role-switching mechanism, one explicit login per role.
 - Secondary roles follow the integration's `OAUTH_USE_SECONDARY_ROLES`: the default `NONE` suppresses them entirely, `IMPLICIT` (above) activates the user's `DEFAULT_SECONDARY_ROLES` at session start (both verified live).
-  With `IMPLICIT` and `DEFAULT_SECONDARY_ROLES = ('ALL')` the session carries the privilege union of every granted role - including admin roles the user holds, since the blocked-roles list only guards the primary role.
+  With `IMPLICIT` and `DEFAULT_SECONDARY_ROLES = ('ALL')` every session ambiently carries the privilege union of all granted roles - including admin roles the user holds, since the blocked-roles list only guards the primary role.
+  With the ring available, explicit `--role` selection is usually the better model; keep `DEFAULT_SECONDARY_ROLES = ()` unless queries genuinely need cross-role reads in one statement.
 - Snowflake blocks ACCOUNTADMIN and SECURITYADMIN as the primary role over OAuth by default.
 - Local dbt verbs work under OAuth: the ephemeral profile uses dbt's native `authenticator: oauth` with a freshly refreshed access token.
-  The session runs as the token's pinned role, so the target's `role:` must match it (`login --role <builder role>` first).
+  The ring supplies the login matching the target's `role:` when one exists (`login --role <builder role>` once); otherwise the default login connects and a role mismatch fails with that hint.
   Access tokens live ~10 minutes; connections opened while it is valid keep working, and the profile defaults `reuse_connections: true` so long runs ride them.
-- The refresh token on disk is a long-lived credential; the file is 0600 and should be treated like a PAT.
+- The refresh tokens on disk are long-lived credentials; the file is 0600 and should be treated like a PAT.
 
 ## Read-only by default, writes by consent
 

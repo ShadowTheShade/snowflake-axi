@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { parse as parseYaml } from "yaml";
 import { type AuthMode, envFilePath, loadConfig } from "./config.js";
-import { refreshedAccessToken } from "./oauth.js";
+import { hasLogin, refreshedAccessToken } from "./oauth.js";
 
 /**
  * Local dbt: spawns the dbt CLI against the project in the working directory,
@@ -313,9 +313,14 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   let exit: DbtExit;
   try {
     writeFileSync(join(profilesDir, "profiles.yml"), `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
+    // dbt connects as the target's role, so prefer that role's login from the
+    // token ring; without one, the default login runs and a mismatch surfaces
+    // Snowflake's role error with the login --role hint below.
+    const targetRole = outputs[targetName].role;
+    const tokenRole = typeof targetRole === "string" && hasLogin(targetRole) ? targetRole : undefined;
     const credentialEnv =
       config.auth === "oauth"
-        ? { [DBT_TOKEN_ENV]: await refreshedAccessToken() }
+        ? { [DBT_TOKEN_ENV]: await refreshedAccessToken(tokenRole) }
         : { [DBT_PASSWORD_ENV]: config.token };
     exit = await runDbt(argv, { ...process.env, ...credentialEnv }, options.timeoutSeconds);
   } finally {

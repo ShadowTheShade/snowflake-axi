@@ -1,14 +1,20 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { AxiError } from "axi-sdk-js";
 import {
   accountUrl,
+  DEFAULT_ROLE_KEY,
   type OAuthLoginSettings,
+  type OAuthTokenRing,
   type OAuthTokens,
   oauthLoginSettings,
-  readOAuthTokens,
-  writeOAuthTokens,
+  oauthRingKeys,
+  oauthRoleKey,
+  oauthTokenPath,
+  readOAuthRing,
+  writeOAuthRing,
 } from "./config.js";
 
 // The redirect URI must byte-match the security integration's registered
@@ -36,9 +42,13 @@ function base64url(bytes: Buffer): string {
   return bytes.toString("base64url");
 }
 
-function sessionExpired(): AxiError {
+function loginCommandFor(roleScope: string | undefined): string {
+  return roleScope === undefined ? "snowflake-axi login" : `snowflake-axi login --role ${roleScope}`;
+}
+
+function sessionExpired(roleScope: string | undefined): AxiError {
   return new AxiError("The OAuth session has expired or was revoked", "AUTH_ERROR", [
-    "Run `snowflake-axi login` to sign in again",
+    `Run \`${loginCommandFor(roleScope)}\` to sign in again`,
   ]);
 }
 
@@ -46,6 +56,45 @@ function notLoggedIn(): AxiError {
   return new AxiError("No OAuth login was found", "AUTH_ERROR", [
     "Run `snowflake-axi login` to sign in with the browser",
   ]);
+}
+
+function loginList(ring: OAuthTokenRing): string {
+  return oauthRingKeys(ring).join(", ");
+}
+
+/**
+ * The login a role selects from the ring. Without a role: the default login,
+ * or the only login when a single role-pinned one exists - so a machine
+ * logged in for exactly one role works without repeating --role everywhere.
+ */
+function activeTokens(role: string | undefined): OAuthTokens {
+  const ring = readOAuthRing();
+  const keys = ring ? oauthRingKeys(ring) : [];
+  if (!ring || keys.length === 0) throw notLoggedIn();
+  if (role !== undefined) {
+    const entry = ring.entries[oauthRoleKey(role)];
+    if (!entry) {
+      throw new AxiError(`No OAuth login for role ${role.toUpperCase()}`, "AUTH_ERROR", [
+        `Run \`snowflake-axi login --role ${role.toUpperCase()}\` once to add it; each role keeps its own login`,
+        `Current logins: ${loginList(ring)}`,
+      ]);
+    }
+    return entry;
+  }
+  const fallback = ring.entries[DEFAULT_ROLE_KEY] ?? (keys.length === 1 ? ring.entries[keys[0]] : undefined);
+  if (!fallback) {
+    throw new AxiError("Only role-pinned OAuth logins exist, so a role must be chosen", "AUTH_ERROR", [
+      `Pass --role with one of the logins: ${loginList(ring)}`,
+      "Or run `snowflake-axi login` (no --role) to add a default-role login",
+    ]);
+  }
+  return fallback;
+}
+
+/** Whether the ring holds a login for the role (or a default login when omitted). */
+export function hasLogin(role?: string): boolean {
+  const ring = readOAuthRing();
+  return ring !== undefined && ring.entries[oauthRoleKey(role)] !== undefined;
 }
 
 async function tokenRequest(account: string, form: Record<string, string>): Promise<TokenResponse> {
@@ -175,8 +224,8 @@ function toTokens(
 
 /**
  * Browser authorization-code flow with PKCE: no client secret ships in the
- * tool, and the state nonce ties the callback to this process. Writes the
- * token file on success.
+ * tool, and the state nonce ties the callback to this process. Merges the
+ * login into the token ring on success, leaving other roles' logins intact.
  */
 export async function login(options: { role?: string } = {}): Promise<OAuthTokens> {
   const settings = oauthLoginSettings();
@@ -204,23 +253,36 @@ export async function login(options: { role?: string } = {}): Promise<OAuthToken
     client_id: settings.clientId,
   });
   const tokens = toTokens(settings, roleScope, payload);
-  writeOAuthTokens(tokens);
+  persistTokens(tokens);
   return tokens;
 }
 
-let inflightRefresh: Promise<OAuthTokens> | undefined;
+function persistTokens(tokens: OAuthTokens): void {
+  // Re-read the ring at write time so a login for one role never clobbers a
+  // token another role's refresh persisted meanwhile.
+  const ring = readOAuthRing() ?? { entries: {} };
+  ring.entries[oauthRoleKey(tokens.roleScope)] = tokens;
+  writeOAuthRing(ring);
+}
 
-// Concurrent callers share one refresh so parallel statements cannot race
-// the token file or spend the refresh grant twice.
+const inflightRefresh = new Map<string, Promise<OAuthTokens>>();
+
+// Concurrent callers share one refresh per role so parallel statements cannot
+// race the token file or spend a refresh grant twice.
 function refreshTokens(tokens: OAuthTokens): Promise<OAuthTokens> {
-  inflightRefresh ??= doRefresh(tokens).finally(() => {
-    inflightRefresh = undefined;
-  });
-  return inflightRefresh;
+  const key = oauthRoleKey(tokens.roleScope);
+  let pending = inflightRefresh.get(key);
+  if (!pending) {
+    pending = doRefresh(tokens).finally(() => {
+      inflightRefresh.delete(key);
+    });
+    inflightRefresh.set(key, pending);
+  }
+  return pending;
 }
 
 async function doRefresh(tokens: OAuthTokens): Promise<OAuthTokens> {
-  if (Date.now() >= tokens.refreshTokenExpiresAt) throw sessionExpired();
+  if (Date.now() >= tokens.refreshTokenExpiresAt) throw sessionExpired(tokens.roleScope);
   let payload: TokenResponse;
   try {
     payload = await tokenRequest(tokens.account, {
@@ -229,25 +291,61 @@ async function doRefresh(tokens: OAuthTokens): Promise<OAuthTokens> {
       client_id: tokens.clientId,
     });
   } catch (error) {
-    if (error instanceof AxiError && error.code === "AUTH_ERROR") throw sessionExpired();
+    if (error instanceof AxiError && error.code === "AUTH_ERROR") throw sessionExpired(tokens.roleScope);
     throw error;
   }
   const updated = toTokens(tokens, tokens.roleScope, payload, tokens);
-  writeOAuthTokens(updated);
+  persistTokens(updated);
   return updated;
 }
 
-/** A live access token, refreshed silently when within the expiry margin. */
-export async function currentAccessToken(): Promise<string> {
-  const tokens = readOAuthTokens();
-  if (!tokens) throw notLoggedIn();
+/** A live access token for the role's login, refreshed silently when within the expiry margin. */
+export async function currentAccessToken(role?: string): Promise<string> {
+  const tokens = activeTokens(role);
   if (Date.now() < tokens.accessTokenExpiresAt - REFRESH_MARGIN_MS) return tokens.accessToken;
   return (await refreshTokens(tokens)).accessToken;
 }
 
 /** Unconditional refresh, for the one retry after a 401. */
-export async function refreshedAccessToken(): Promise<string> {
-  const tokens = readOAuthTokens();
-  if (!tokens) throw notLoggedIn();
-  return (await refreshTokens(tokens)).accessToken;
+export async function refreshedAccessToken(role?: string): Promise<string> {
+  return (await refreshTokens(activeTokens(role))).accessToken;
+}
+
+export interface LogoutResult {
+  removed: string[];
+  remaining: string[];
+}
+
+/**
+ * Removes logins from the ring: one role's, or every login with `all`.
+ * Deleting the last entry removes the token file, flipping the machine back
+ * to PAT auth. Snowflake OAuth has no client revocation endpoint, so the
+ * refresh tokens die by deletion here and by their server-side expiry.
+ */
+export function logout(options: { role?: string; all?: boolean } = {}): LogoutResult {
+  const ring = readOAuthRing();
+  if (!ring || Object.keys(ring.entries).length === 0) throw notLoggedIn();
+  const keys = oauthRingKeys(ring);
+  if (options.all || (options.role === undefined && keys.length === 1)) {
+    rmSync(oauthTokenPath(), { force: true });
+    return { removed: keys, remaining: [] };
+  }
+  if (options.role === undefined) {
+    throw new AxiError("Several logins exist, so choose what to log out", "VALIDATION_ERROR", [
+      `Pass --role <name> for one of: ${loginList(ring)}; --role default for the unscoped login`,
+      "Or pass --all to remove every login",
+    ]);
+  }
+  const key = options.role.toLowerCase() === DEFAULT_ROLE_KEY ? DEFAULT_ROLE_KEY : oauthRoleKey(options.role);
+  if (!ring.entries[key]) {
+    throw new AxiError(`No OAuth login for role ${key}`, "NOT_FOUND", [`Current logins: ${loginList(ring)}`]);
+  }
+  delete ring.entries[key];
+  const remaining = oauthRingKeys(ring);
+  if (remaining.length === 0) {
+    rmSync(oauthTokenPath(), { force: true });
+  } else {
+    writeOAuthRing(ring);
+  }
+  return { removed: [key], remaining };
 }

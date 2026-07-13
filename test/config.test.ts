@@ -170,10 +170,34 @@ describe("auth mode selection", () => {
     expect(loadConfig()).toMatchObject({ auth: "pat", token: "TOKEN" });
   });
 
-  it("selects OAuth when a token file exists, taking identity from the login", async () => {
+  it("selects OAuth when a pre-ring token file exists, taking identity from the login", async () => {
     stubConfigHome({ "oauth-tokens.json": tokenFile });
     const loadConfig = await freshLoadConfig();
     expect(loadConfig()).toMatchObject({ auth: "oauth", account: "OAUTH_ACC", user: "ALICE", token: undefined });
+  });
+
+  it("takes identity from the ring's default login when several exist", async () => {
+    stubConfigHome({
+      "oauth-tokens.json": JSON.stringify({
+        version: 2,
+        entries: {
+          BUILDER: { ...JSON.parse(tokenFile), user: "BOB", roleScope: "BUILDER" },
+          default: JSON.parse(tokenFile),
+        },
+      }),
+    });
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "oauth", account: "OAUTH_ACC", user: "ALICE" });
+  });
+
+  it("treats an empty ring like no login at all", async () => {
+    stubCreds();
+    stubConfigHome({ "oauth-tokens.json": JSON.stringify({ version: 2, entries: {} }) });
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", token: "TOKEN" });
   });
 
   it("lets SNOWFLAKE_AUTH=pat force PAT past an existing token file", async () => {

@@ -13,7 +13,7 @@ vi.mock("../src/config.js", async (importOriginal) => ({
 
 const currentAccessToken = vi.hoisted(() => vi.fn());
 const refreshedAccessToken = vi.hoisted(() => vi.fn());
-vi.mock("../src/oauth.js", () => ({ currentAccessToken, refreshedAccessToken }));
+vi.mock("../src/oauth.js", () => ({ currentAccessToken, refreshedAccessToken, hasLogin: vi.fn() }));
 
 import { runQuery } from "../src/snowflake.js";
 
@@ -78,7 +78,24 @@ describe("runQuery in OAuth mode", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("explains that OAuth sessions are role-pinned when a role is refused", async () => {
+  it("selects the requested role's login from the token ring", async () => {
+    currentAccessToken.mockResolvedValue("reporter-access");
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1", { role: "REPORTER" });
+    expect(currentAccessToken).toHaveBeenCalledWith("REPORTER");
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+    expect(body.role).toBe("REPORTER");
+  });
+
+  it("retries a 401 with a refresh of the requested role's login", async () => {
+    currentAccessToken.mockResolvedValue("stale");
+    refreshedAccessToken.mockResolvedValue("fresh");
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { message: "Invalid token" })).mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1", { role: "REPORTER" });
+    expect(refreshedAccessToken).toHaveBeenCalledWith("REPORTER");
+  });
+
+  it("explains the per-role logins when a role is refused", async () => {
     currentAccessToken.mockResolvedValue("access-1");
     fetchMock.mockResolvedValue(
       jsonResponse(422, {
@@ -90,8 +107,8 @@ describe("runQuery in OAuth mode", () => {
     await expect(runQuery("SELECT 1", { role: "OTHER" })).rejects.toMatchObject({
       code: "SNOWFLAKE_ERROR",
       suggestions: [
-        "OAuth sessions are pinned to the role in the token: the default role, or the one from `login --role`",
-        "Run `snowflake-axi login --role <name>` to switch; per-query --role only works with PAT auth",
+        "Each OAuth login is pinned to one role, and per-query --role uses the login for that role",
+        "Run `snowflake-axi login --role <name>` once to add that role's login to the ring",
       ],
     });
   });

@@ -39,7 +39,7 @@ export function oauthTokenPath(): string {
   return join(configDir(), "oauth-tokens.json");
 }
 
-/** Tokens from `snowflake-axi login`; timestamps are epoch milliseconds. */
+/** Tokens from one `snowflake-axi login`; timestamps are epoch milliseconds. */
 export interface OAuthTokens {
   account: string;
   clientId: string;
@@ -51,20 +51,53 @@ export interface OAuthTokens {
   roleScope?: string;
 }
 
-export function readOAuthTokens(): OAuthTokens | undefined {
+/**
+ * The token ring: one independent login per role, since Snowflake OAuth pins
+ * every token to a single role. Entries are keyed by oauthRoleKey(roleScope);
+ * per-query --role selects the matching login.
+ */
+export interface OAuthTokenRing {
+  entries: Record<string, OAuthTokens>;
+}
+
+export const DEFAULT_ROLE_KEY = "default";
+
+/** Role names are case-insensitive identifiers; the unscoped login is "default". */
+export function oauthRoleKey(role?: string): string {
+  return role === undefined ? DEFAULT_ROLE_KEY : role.toUpperCase();
+}
+
+export function readOAuthRing(): OAuthTokenRing | undefined {
+  let parsed: unknown;
   try {
-    return JSON.parse(readFileSync(oauthTokenPath(), "utf8")) as OAuthTokens;
+    parsed = JSON.parse(readFileSync(oauthTokenPath(), "utf8"));
   } catch {
     return undefined;
   }
+  if (typeof parsed !== "object" || parsed === null) return undefined;
+  const record = parsed as Record<string, unknown>;
+  // Pre-ring files held a single login at the top level.
+  if (typeof record.refreshToken === "string") {
+    const tokens = parsed as unknown as OAuthTokens;
+    return { entries: { [oauthRoleKey(tokens.roleScope)]: tokens } };
+  }
+  if (typeof record.entries !== "object" || record.entries === null) return undefined;
+  return { entries: record.entries as Record<string, OAuthTokens> };
 }
 
-// The refresh token is a long-lived credential, so the file must stay 0600;
+// The refresh tokens are long-lived credentials, so the file must stay 0600;
 // chmod covers overwrites, where writeFileSync ignores the mode.
-export function writeOAuthTokens(tokens: OAuthTokens): void {
+export function writeOAuthRing(ring: OAuthTokenRing): void {
   mkdirSync(configDir(), { recursive: true });
-  writeFileSync(oauthTokenPath(), `${JSON.stringify(tokens, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(oauthTokenPath(), `${JSON.stringify({ version: 2, ...ring }, null, 2)}\n`, { mode: 0o600 });
   chmodSync(oauthTokenPath(), 0o600);
+}
+
+/** Ring keys with the default login first, then roles alphabetically. */
+export function oauthRingKeys(ring: OAuthTokenRing): string[] {
+  return Object.keys(ring.entries).sort((a, b) =>
+    a === DEFAULT_ROLE_KEY ? -1 : b === DEFAULT_ROLE_KEY ? 1 : a.localeCompare(b),
+  );
 }
 
 function parseEnvFile(path: string): Record<string, string> {
@@ -209,14 +242,14 @@ let cached: Config | undefined;
  * `snowflake-axi login`; PAT remains the default otherwise, so existing
  * setups are untouched.
  */
-function resolveAuthMode(explicit: string | undefined, tokens: OAuthTokens | undefined): AuthMode {
+function resolveAuthMode(explicit: string | undefined, ring: OAuthTokenRing | undefined): AuthMode {
   const mode = explicit?.toLowerCase();
   if (mode !== undefined && mode !== "pat" && mode !== "oauth") {
     throw new AxiError(`Invalid SNOWFLAKE_AUTH '${explicit}'`, "CONFIG_ERROR", [
       `Fix SNOWFLAKE_AUTH in ${envFilePath()}: pat or oauth`,
     ]);
   }
-  return mode ?? (tokens ? "oauth" : "pat");
+  return mode ?? (ring && Object.keys(ring.entries).length > 0 ? "oauth" : "pat");
 }
 
 export function loadConfig(): Config {
@@ -225,21 +258,22 @@ export function loadConfig(): Config {
   const toml = snowCliConnection();
   const get = (key: string) => process.env[key] || file[key] || toml[key] || undefined;
 
-  const tokens = readOAuthTokens();
-  const auth = resolveAuthMode(get("SNOWFLAKE_AUTH"), tokens);
+  const ring = readOAuthRing();
+  const auth = resolveAuthMode(get("SNOWFLAKE_AUTH"), ring);
   let account: string;
   let user: string;
   let token: string | undefined;
   if (auth === "oauth") {
-    if (!tokens) {
+    const identity = ring ? ring.entries[oauthRingKeys(ring)[0]] : undefined;
+    if (!identity) {
       throw new AxiError("SNOWFLAKE_AUTH=oauth but no OAuth login was found", "CONFIG_ERROR", [
         "Run `snowflake-axi login` to sign in with the browser",
       ]);
     }
-    // The login owns identity in OAuth mode: the token was minted for that
-    // account and user, so env values cannot retarget it.
-    account = tokens.account;
-    user = tokens.user;
+    // The logins own identity in OAuth mode: every token in the ring was
+    // minted for one account and user, so env values cannot retarget it.
+    account = identity.account;
+    user = identity.user;
   } else {
     const envAccount = get("SNOWFLAKE_ACCOUNT");
     const envUser = get("SNOWFLAKE_USER");

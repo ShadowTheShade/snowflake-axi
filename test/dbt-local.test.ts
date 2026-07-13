@@ -7,11 +7,12 @@ import { parse as parseYaml } from "yaml";
 
 const loadConfig = vi.hoisted(() => vi.fn());
 const refreshedAccessToken = vi.hoisted(() => vi.fn());
+const hasLogin = vi.hoisted(() => vi.fn());
 vi.mock("../src/config.js", () => ({
   loadConfig,
   envFilePath: () => "/home/user/.config/snowflake-axi/env",
 }));
-vi.mock("../src/oauth.js", () => ({ refreshedAccessToken }));
+vi.mock("../src/oauth.js", () => ({ refreshedAccessToken, hasLogin }));
 
 import {
   buildEphemeralProfile,
@@ -38,6 +39,8 @@ beforeEach(() => {
   });
   refreshedAccessToken.mockReset();
   refreshedAccessToken.mockResolvedValue("fresh-access-token");
+  hasLogin.mockReset();
+  hasLogin.mockReturnValue(false);
 });
 
 afterEach(() => {
@@ -340,7 +343,8 @@ exit 2`);
 
     const output = await runLocalDbt({ verb: "build", projectDir: dir, target: "dev", timeoutSeconds: 30 });
     expect(output.count).toBe("1 nodes (1 success)");
-    expect(refreshedAccessToken).toHaveBeenCalledTimes(1);
+    // No login for the target's role, so the default login authenticates.
+    expect(refreshedAccessToken).toHaveBeenCalledExactlyOnceWith(undefined);
 
     const written = parseYaml(readFileSync(join(capture, "profile.yml"), "utf8")) as Record<string, unknown>;
     const target = (written.demo as { outputs: Record<string, Record<string, unknown>> }).outputs.dev;
@@ -348,6 +352,16 @@ exit 2`);
     expect(target.token).toBe(`{{ env_var('${DBT_TOKEN_ENV}') }}`);
     expect(readFileSync(join(capture, "profile.yml"), "utf8")).not.toContain("fresh-access-token");
     expect(readFileSync(join(capture, "token.txt"), "utf8")).toBe("fresh-access-token");
+  });
+
+  it("authenticates with the target role's login when the ring holds one", async () => {
+    loadConfig.mockReturnValue({ account: "MYACCT", user: "ANTHONYG", auth: "oauth", dbtTarget: undefined });
+    hasLogin.mockImplementation((role?: string) => role === "MY_ROLE");
+    writeProjectFiles(PROFILES);
+    shimWritingResults(runResults([{ id: "model.demo.stg_flavors", status: "success" }]), 0);
+
+    await runLocalDbt({ verb: "build", projectDir: dir, target: "dev", timeoutSeconds: 30 });
+    expect(refreshedAccessToken).toHaveBeenCalledExactlyOnceWith("MY_ROLE");
   });
 
   it("hints at login --role when an OAuth run fails on a role error", async () => {

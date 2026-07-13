@@ -47,13 +47,15 @@ export interface RunningStatement {
   handle: string;
 }
 
-async function requestContext(): Promise<{ base: string; headers: Record<string, string> }> {
+// In OAuth mode the role selects a login from the token ring, since every
+// Snowflake OAuth token is pinned to one role.
+async function requestContext(role?: string): Promise<{ base: string; headers: Record<string, string> }> {
   const config = loadConfig();
   const oauth = config.auth === "oauth";
   return {
     base: accountUrl(config.account),
     headers: {
-      authorization: `Bearer ${oauth ? await currentAccessToken() : (config.token ?? "")}`,
+      authorization: `Bearer ${oauth ? await currentAccessToken(role) : (config.token ?? "")}`,
       "x-snowflake-authorization-token-type": oauth ? "OAUTH" : "PROGRAMMATIC_ACCESS_TOKEN",
       "content-type": "application/json",
       "user-agent": "snowflake-axi",
@@ -64,12 +66,12 @@ async function requestContext(): Promise<{ base: string; headers: Record<string,
 // In OAuth mode a 401 usually means the access token died mid-flight (revoked
 // session, clock skew past the refresh margin): one forced refresh and one
 // retry recovers it; an expired refresh token surfaces as the re-login error.
-async function withAuthRetry<T>(run: () => Promise<T>): Promise<T> {
+async function withAuthRetry<T>(run: () => Promise<T>, role?: string): Promise<T> {
   try {
     return await run();
   } catch (error) {
     if (loadConfig().auth !== "oauth" || !(error instanceof AxiError) || error.code !== "AUTH_ERROR") throw error;
-    await refreshedAccessToken();
+    await refreshedAccessToken(role);
     return run();
   }
 }
@@ -84,9 +86,10 @@ async function withAuthRetry<T>(run: () => Promise<T>): Promise<T> {
  */
 export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
+  const role = options.role ?? config.role;
   const body = JSON.stringify({
     statement: sqlText,
-    role: options.role ?? config.role,
+    role,
     warehouse: options.warehouse,
     database: config.database,
     schema: config.schema,
@@ -95,14 +98,14 @@ export async function runQuery(sqlText: string, options: QueryOptions = {}): Pro
   });
 
   return withAuthRetry(async () => {
-    const { base, headers } = await requestContext();
+    const { base, headers } = await requestContext(role);
     const response = await awaitResult(base, headers, await submit(base, headers, body));
     const payload = await parsePayload(response);
     if (!response.ok) {
       throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
     }
     return collectResult(base, headers, payload, options.maxRows);
-  });
+  }, role);
 }
 
 /**
@@ -268,8 +271,8 @@ function translateError(status: number, message: string): AxiError {
       "SNOWFLAKE_ERROR",
       loadConfig().auth === "oauth"
         ? [
-            "OAuth sessions are pinned to the role in the token: the default role, or the one from `login --role`",
-            "Run `snowflake-axi login --role <name>` to switch; per-query --role only works with PAT auth",
+            "Each OAuth login is pinned to one role, and per-query --role uses the login for that role",
+            "Run `snowflake-axi login --role <name>` once to add that role's login to the ring",
           ]
         : [
             "The role must be granted to the service user: SHOW GRANTS TO USER <user>",

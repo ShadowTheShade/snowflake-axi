@@ -1,5 +1,5 @@
 import { defineCommand } from "../command.js";
-import { loadConfig, loadPgConfig, readOAuthTokens } from "../config.js";
+import { loadConfig, loadPgConfig, oauthRingKeys, readOAuthRing } from "../config.js";
 
 function pgLine(): string | undefined {
   try {
@@ -24,10 +24,15 @@ export const contextCommand = defineCommand("context", {
         return "";
       }
       const pg = pgLine();
-      const refreshExpires = config.auth === "oauth" ? readOAuthTokens()?.refreshTokenExpiresAt : undefined;
+      const ring = config.auth === "oauth" ? readOAuthRing() : undefined;
+      const entries = ring ? oauthRingKeys(ring).map((key) => ring.entries[key]) : [];
+      // The earliest refresh expiry is the first login that will demand a browser.
+      const refreshExpires =
+        entries.length > 0 ? Math.min(...entries.map((entry) => entry.refreshTokenExpiresAt)) : undefined;
+      const roles = ring ? oauthRingKeys(ring) : [];
       const auth =
         config.auth === "oauth"
-          ? `OAuth, logged in as ${config.user}${
+          ? `OAuth, logged in as ${config.user}${roles.length > 1 ? ` (${roles.join(", ")})` : ""}${
               refreshExpires !== undefined ? `, expires ${new Date(refreshExpires).toISOString().slice(0, 10)}` : ""
             }`
           : "PAT";
