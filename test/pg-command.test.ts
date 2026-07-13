@@ -1,8 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const runPgQuery = vi.hoisted(() => vi.fn());
-vi.mock("../src/pg.js", () => ({ runPgQuery }));
+const runPgWrite = vi.hoisted(() => vi.fn());
+vi.mock("../src/pg.js", () => ({ runPgQuery, runPgWrite }));
 
+const requireGrant = vi.hoisted(() => vi.fn());
+vi.mock("../src/grants.js", () => ({ requireGrant }));
+
+import { AxiError } from "axi-sdk-js";
 import { pgCommand } from "../src/commands/pg.js";
 
 beforeAll(() => {
@@ -14,6 +19,8 @@ beforeAll(() => {
 
 beforeEach(() => {
   runPgQuery.mockReset();
+  runPgWrite.mockReset();
+  requireGrant.mockReset();
 });
 
 function catalogRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -221,12 +228,79 @@ describe("pg query", () => {
   });
 });
 
+describe("pg exec", () => {
+  it("requires the pg.write grant before touching the connection", async () => {
+    requireGrant.mockImplementation(() => {
+      throw new AxiError("Write capability 'pg.write' is not granted", "WRITE_NOT_ALLOWED", []);
+    });
+    await expect(pgCommand.run(["exec", "DELETE FROM orders WHERE id = 1"])).rejects.toMatchObject({
+      code: "WRITE_NOT_ALLOWED",
+    });
+    expect(requireGrant).toHaveBeenCalledWith("pg.write");
+    expect(runPgWrite).not.toHaveBeenCalled();
+  });
+
+  it("runs a DML statement and reports the affected count", async () => {
+    runPgWrite.mockResolvedValueOnce({ command: "UPDATE", rowCount: 3, rows: [], numericColumns: new Set() });
+    const output = (await pgCommand.run(["exec", "UPDATE orders SET status = 'shipped' WHERE id < 4"])) as Record<
+      string,
+      unknown
+    >;
+    expect(runPgWrite.mock.calls[0][0]).toBe("UPDATE orders SET status = 'shipped' WHERE id < 4");
+    expect(runPgWrite.mock.calls[0][1]).toEqual({ timeoutSeconds: 60 });
+    expect(output.command).toBe("UPDATE");
+    expect(output.affected).toBe(3);
+    expect(output.returned).toBeUndefined();
+    expect(output.elapsed).toMatch(/s$/);
+  });
+
+  it("shows RETURNING rows and coerces numeric columns", async () => {
+    runPgWrite.mockResolvedValueOnce({
+      command: "INSERT",
+      rowCount: 1,
+      rows: [{ id: "7", name: "urgent" }],
+      numericColumns: new Set(["id"]),
+    });
+    const output = (await pgCommand.run([
+      "exec",
+      "INSERT INTO tags (name) VALUES ('urgent') RETURNING id, name",
+    ])) as Record<string, unknown>;
+    expect(output.affected).toBe(1);
+    expect(output.returned).toEqual([{ id: 7, name: "urgent" }]);
+  });
+
+  it("omits the affected count for DDL that reports none", async () => {
+    runPgWrite.mockResolvedValueOnce({ command: "CREATE", rowCount: null, rows: [], numericColumns: new Set() });
+    const output = (await pgCommand.run(["exec", "CREATE TABLE t (a int)"])) as Record<string, unknown>;
+    expect(output.command).toBe("CREATE");
+    expect(output.affected).toBeUndefined();
+  });
+
+  it("rejects a read statement before connecting, pointing at pg query", async () => {
+    await expect(pgCommand.run(["exec", "SELECT 1"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringContaining("read statement"),
+    });
+    expect(runPgWrite).not.toHaveBeenCalled();
+  });
+
+  it("rejects an unsupported write statement", async () => {
+    await expect(pgCommand.run(["exec", "VACUUM orders"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runPgWrite).not.toHaveBeenCalled();
+  });
+
+  it("fails loud when no SQL is provided", async () => {
+    await expect(pgCommand.run(["exec"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runPgWrite).not.toHaveBeenCalled();
+  });
+});
+
 describe("pg verb hints", () => {
-  it("redirects write verbs to the operator instead of misparsing them", async () => {
+  it("redirects write verbs to pg exec instead of misparsing them", async () => {
     await expect(pgCommand.run(["insert", "into", "t"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
       message: "'insert' is not a pg subcommand",
-      suggestions: expect.arrayContaining([expect.stringContaining("read-only")]),
+      suggestions: expect.arrayContaining([expect.stringContaining("pg exec")]),
     });
     expect(runPgQuery).not.toHaveBeenCalled();
   });

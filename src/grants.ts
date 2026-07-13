@@ -31,6 +31,16 @@ export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: 
     description: "Refresh a git repository from its origin (ALTER GIT REPOSITORY FETCH)",
     unlocks: "snowflake-axi git fetch <db.schema.repo>",
   },
+  "sql.write": {
+    description:
+      "Run write statements over the Snowflake SQL API: INSERT, UPDATE, DELETE, MERGE, TRUNCATE, DDL (CREATE, ALTER, DROP, UNDROP), plus COPY and CALL",
+    unlocks: 'snowflake-axi exec "UPDATE <table> SET ..."',
+  },
+  "pg.write": {
+    description:
+      "Run write statements against Snowflake Postgres: INSERT, UPDATE, DELETE, MERGE, and DDL (CREATE, ALTER, DROP, TRUNCATE)",
+    unlocks: 'snowflake-axi pg exec "UPDATE <table> SET ..."',
+  },
 };
 
 const HEADER = "# Write capabilities granted to snowflake-axi (managed by `snowflake-axi allow`)";

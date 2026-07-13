@@ -1,10 +1,12 @@
 import { defineCommand } from "../command.js";
 import { loadConfig, loadPgConfig, oauthRingKeys, readOAuthRing } from "../config.js";
+import { readGrants } from "../grants.js";
 
 function pgLine(): string | undefined {
   try {
     const pg = loadPgConfig();
-    return `${pg.database} @ ${pg.host} (read-only; \`snowflake-axi pg\`)`;
+    const mode = readGrants().has("pg.write") ? "read-write" : "read-only";
+    return `${pg.database} @ ${pg.host} (${mode}; \`snowflake-axi pg\`)`;
   } catch {
     return undefined;
   }

@@ -58,6 +58,15 @@ describe("offline behaviors (no credentials required)", () => {
     expect(stdout).toContain("Multiple statements");
   });
 
+  it("exec is refused without the sql.write grant, before any connection", async () => {
+    const { stdout, code } = await cli(["exec", "DELETE FROM ANYTHING WHERE ID = 1"], {
+      XDG_CONFIG_HOME: "/nonexistent-axi-config",
+    });
+    expect(code).toBe(1);
+    expect(stdout).toContain("WRITE_NOT_ALLOWED");
+    expect(stdout).toContain("allow sql.write");
+  });
+
   it("stray positional arguments are rejected with exit 2, before any connection", async () => {
     const { stdout, code } = await cli(["warehouses", "BOGUS"]);
     expect(code).toBe(2);
@@ -92,10 +101,10 @@ describe("offline behaviors (no credentials required)", () => {
     expect(stdout).toContain("READ_ONLY");
   });
 
-  it("pg write verbs are redirected with exit 2, before any connection", async () => {
+  it("pg write verbs are redirected to pg exec with exit 2, before any connection", async () => {
     const { stdout, code } = await cli(["pg", "insert", "into", "t"]);
     expect(code).toBe(2);
-    expect(stdout).toContain("read-only");
+    expect(stdout).toContain("pg exec");
   });
 
   it("pg EXPLAIN ANALYZE around a write is rejected before any connection", async () => {

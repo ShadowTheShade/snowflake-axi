@@ -16,6 +16,21 @@ export interface PgQueryOptions {
   timeoutSeconds?: number;
 }
 
+export interface PgWriteResult {
+  /** Server command tag word: INSERT, UPDATE, DELETE, MERGE, CREATE, DROP, ... */
+  command: string;
+  /** Rows the statement touched; null for DDL, which reports no count. */
+  rowCount: number | null;
+  /** RETURNING payload, empty unless the statement had a RETURNING clause. */
+  rows: Record<string, unknown>[];
+  numericColumns: Set<string>;
+}
+
+export interface PgWriteOptions {
+  binds?: unknown[];
+  timeoutSeconds?: number;
+}
+
 const DEFAULT_TIMEOUT_S = 60;
 const CONNECT_TIMEOUT_MS = 15_000;
 const CHUNK = 500;
@@ -27,7 +42,7 @@ for (const oid of [1082, 1083, 1114, 1184, 1266, 1186]) {
   pg.types.setTypeParser(oid, (value) => value);
 }
 
-function clientConfig(timeoutSeconds: number): pg.ClientConfig {
+function clientConfig(timeoutSeconds: number, readOnly = true): pg.ClientConfig {
   const config = loadPgConfig();
   return {
     host: config.host,
@@ -38,9 +53,11 @@ function clientConfig(timeoutSeconds: number): pg.ClientConfig {
     ssl: config.sslmode === "disable" ? false : config.sslmode === "verify-full" ? true : { rejectUnauthorized: false },
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     application_name: "snowflake-axi",
-    // Read-only is enforced in the startup packet, before any statement runs;
-    // single-statement-per-call means nothing can flip it back off in-session.
-    options: `-c default_transaction_read_only=on -c statement_timeout=${timeoutSeconds * 1000}`,
+    // The read/write mode is set in the startup packet, before any statement
+    // runs; single-statement-per-call means nothing can flip it back in-session.
+    // Reads pin default_transaction_read_only=on so DML cannot slip through even
+    // if the head check is somehow evaded; writes (pg.write grant) pin it off.
+    options: `-c default_transaction_read_only=${readOnly ? "on" : "off"} -c statement_timeout=${timeoutSeconds * 1000}`,
   };
 }
 
@@ -61,6 +78,34 @@ export async function runPgQuery(sql: string, options: PgQueryOptions = {}): Pro
   try {
     const cursor = client.query(new Cursor(sql, (options.binds ?? []) as (string | number | null)[]));
     return await readCursor(cursor, options.maxRows);
+  } catch (err) {
+    throw translatePgError(err);
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Executes one write statement on a fresh read-write connection (gated by the
+ * pg.write grant upstream). Passing a values array - even empty - runs it over
+ * the extended protocol, so multi-statement SQL is a server-side error here too.
+ */
+export async function runPgWrite(sql: string, options: PgWriteOptions = {}): Promise<PgWriteResult> {
+  const client = new pg.Client(clientConfig(options.timeoutSeconds ?? DEFAULT_TIMEOUT_S, false));
+  try {
+    await client.connect();
+  } catch (err) {
+    await client.end().catch(() => {});
+    throw translatePgError(err);
+  }
+  try {
+    const result = await client.query({ text: sql, values: (options.binds ?? []) as unknown[] });
+    return {
+      command: result.command,
+      rowCount: result.rowCount,
+      rows: result.rows as Record<string, unknown>[],
+      numericColumns: new Set(result.fields.filter((f) => NUMERIC_OIDS.has(f.dataTypeID)).map((f) => f.name)),
+    };
   } catch (err) {
     throw translatePgError(err);
   } finally {

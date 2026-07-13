@@ -3,6 +3,29 @@ import { AxiError } from "axi-sdk-js";
 const SNOWFLAKE_READ_HEADS = new Set(["SELECT", "WITH", "SHOW", "DESC", "DESCRIBE", "EXPLAIN"]);
 const PG_READ_HEADS = new Set(["SELECT", "WITH", "TABLE", "VALUES", "SHOW", "EXPLAIN"]);
 
+// The write surface `exec` accepts on Snowflake: DML, the everyday DDL, plus
+// COPY and CALL. EXECUTE (IMMEDIATE) is deliberately excluded - it runs SQL from
+// a string, which would defeat head checking - and anything else (GRANT, USE,
+// PUT/GET, ...) is handed to the operator so the executable set stays legible.
+const SNOWFLAKE_WRITE_HEADS = new Set([
+  "INSERT",
+  "UPDATE",
+  "DELETE",
+  "MERGE",
+  "TRUNCATE",
+  "CREATE",
+  "ALTER",
+  "DROP",
+  "UNDROP",
+  "COPY",
+  "CALL",
+]);
+
+// The write surface `pg exec` accepts: DML plus the everyday DDL. Everything
+// else (COPY, VACUUM, GRANT, DO, CALL, ...) stays out of scope and is handed
+// to the operator, keeping the executable statements few and predictable.
+const PG_WRITE_HEADS = new Set(["INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE"]);
+
 // Postgres EXPLAIN ANALYZE executes the statement it plans, and the
 // CREATE TABLE AS / CREATE MATERIALIZED VIEW AS forms slip past the server's
 // read-only-transaction check (verified live: the table really gets created).
@@ -130,10 +153,10 @@ function scan(sql: string, dialect: Dialect): ScanResult {
   return { tokens, multiStatement, stripped };
 }
 
-function assertReadHead(
+/** Scans one statement, failing loud on empty input or a second statement. */
+function scanStatement(
   sql: string,
   dialect: Dialect,
-  heads: Set<string>,
   example: string,
 ): { head: string; sql: string; tokens: string[] } {
   const { tokens, multiStatement, stripped } = scan(sql, dialect);
@@ -146,17 +169,49 @@ function assertReadHead(
       `Run one statement per invocation: ${example}`,
     ]);
   }
-  if (!heads.has(head)) {
-    throw new AxiError(`${head} statements are not allowed (read-only tool)`, "READ_ONLY", [
+  return { head, sql: stripped, tokens };
+}
+
+function assertReadHead(
+  sql: string,
+  dialect: Dialect,
+  heads: Set<string>,
+  example: string,
+): { head: string; sql: string; tokens: string[] } {
+  const result = scanStatement(sql, dialect, example);
+  if (!heads.has(result.head)) {
+    throw new AxiError(`${result.head} statements are not allowed (read-only tool)`, "READ_ONLY", [
       `Allowed statements: ${[...heads].join(", ")}`,
       "Hand write statements to the operator to run manually",
     ]);
   }
-  return { head, sql: stripped, tokens };
+  return result;
 }
 
 export function assertReadOnly(sql: string): { head: string; sql: string } {
   return assertReadHead(sql, SNOWFLAKE, SNOWFLAKE_READ_HEADS, 'snowflake-axi query "SELECT ..."');
+}
+
+/**
+ * Gate for `exec`: one Snowflake write statement, head in SNOWFLAKE_WRITE_HEADS.
+ * Read heads are bounced to `query`; anything unrecognized (including EXECUTE
+ * IMMEDIATE) is refused with the supported set so the agent self-corrects.
+ */
+export function assertWrite(sql: string): { head: string; sql: string } {
+  const example = 'snowflake-axi exec "UPDATE <table> SET ..."';
+  const { head, sql: stripped } = scanStatement(sql, SNOWFLAKE, example);
+  if (SNOWFLAKE_READ_HEADS.has(head)) {
+    throw new AxiError(`${head} is a read statement, not a write`, "VALIDATION_ERROR", [
+      'Run reads through `snowflake-axi query "SELECT ..."`',
+    ]);
+  }
+  if (!SNOWFLAKE_WRITE_HEADS.has(head)) {
+    throw new AxiError(`${head} statements are not supported by \`exec\``, "VALIDATION_ERROR", [
+      `Supported write statements: ${[...SNOWFLAKE_WRITE_HEADS].join(", ")}`,
+      "Hand anything else to the operator to run manually",
+    ]);
+  }
+  return { head, sql: stripped };
 }
 
 export function assertPgReadOnly(sql: string): { head: string; sql: string } {
@@ -176,4 +231,26 @@ export function assertPgReadOnly(sql: string): { head: string; sql: string } {
     }
   }
   return { head: result.head, sql: result.sql };
+}
+
+/**
+ * Gate for `pg exec`: one write statement, head in PG_WRITE_HEADS. Read heads
+ * are bounced to `pg query` (they belong on the read-only connection); anything
+ * unrecognized is refused with the supported set so the agent self-corrects.
+ */
+export function assertPgWrite(sql: string): { head: string; sql: string } {
+  const example = 'snowflake-axi pg exec "UPDATE <table> SET ..."';
+  const { head, sql: stripped } = scanStatement(sql, POSTGRES, example);
+  if (PG_READ_HEADS.has(head)) {
+    throw new AxiError(`${head} is a read statement, not a write`, "VALIDATION_ERROR", [
+      'Run reads through `snowflake-axi pg query "SELECT ..."`',
+    ]);
+  }
+  if (!PG_WRITE_HEADS.has(head)) {
+    throw new AxiError(`${head} statements are not supported by \`pg exec\``, "VALIDATION_ERROR", [
+      `Supported write statements: ${[...PG_WRITE_HEADS].join(", ")}`,
+      "Hand anything else to the operator to run manually",
+    ]);
+  }
+  return { head, sql: stripped };
 }

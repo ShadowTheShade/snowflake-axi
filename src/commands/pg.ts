@@ -2,10 +2,11 @@ import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { loadPgConfig } from "../config.js";
 import { humanBytes, shapeRows } from "../format.js";
+import { requireGrant } from "../grants.js";
 import { IDENTIFIER, likePattern } from "../names.js";
-import { type PgQueryResult, runPgQuery } from "../pg.js";
+import { type PgQueryResult, type PgWriteResult, runPgQuery, runPgWrite } from "../pg.js";
 import { CELL_LIMIT } from "../present.js";
-import { assertPgReadOnly } from "../validate.js";
+import { assertPgReadOnly, assertPgWrite } from "../validate.js";
 
 const KIND_LABELS: Record<string, string> = { r: "TABLE", p: "TABLE", v: "VIEW", m: "MATVIEW" };
 
@@ -259,14 +260,46 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   return { ...presentPgRows(result, full, limit), elapsed };
 }
 
-const READ_ONLY_HINTS = [
-  "pg is read-only: the session runs with default_transaction_read_only=on",
-  "Hand write statements to the operator to run manually",
-];
+/** Shapes a write result: the command tag, its affected count, any RETURNING rows. */
+function presentPgWrite(result: PgWriteResult, full: boolean): Record<string, unknown> {
+  const out: Record<string, unknown> = { command: result.command };
+  if (result.rowCount !== null) out.affected = result.rowCount;
+  if (result.rows.length > 0) {
+    const { rows, truncatedCells } = shapeRows(result.rows, {
+      maxCellChars: full ? null : CELL_LIMIT,
+      numericColumns: result.numericColumns,
+    });
+    out.returned = rows;
+    if (truncatedCells > 0) {
+      out.help = [`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`];
+    }
+  }
+  return out;
+}
+
+async function runExecVerb(args: CommandArgs): Promise<Record<string, unknown>> {
+  requireGrant("pg.write");
+  const timeout = args.int("--timeout");
+  const full = args.bool("--full");
+
+  const rawSql = args.positionals.join(" ").trim();
+  if (!rawSql) {
+    throw new AxiError("No SQL provided", "VALIDATION_ERROR", ['Run `snowflake-axi pg exec "UPDATE ..."`']);
+  }
+  const { sql } = assertPgWrite(rawSql);
+
+  const started = Date.now();
+  const result = await runPgWrite(sql, { timeoutSeconds: timeout });
+  const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
+  return { ...presentPgWrite(result, full), elapsed };
+}
+
+const EXEC_HINT = ['Run `snowflake-axi pg exec "<sql>"` to run one write statement (needs the pg.write grant)'];
 
 export const pgCommand = defineCommand("pg", {
-  summary: "Snowflake Postgres: tables, columns, samples, read-only SQL",
-  description: "Read-only Snowflake Postgres explorer over a direct wire connection",
+  summary: "Snowflake Postgres: tables, columns, samples, read-only SQL, gated writes",
+  description:
+    "Snowflake Postgres explorer over a direct wire connection: read-only by default, writes via the pg.write grant",
   defaultSubcommand: "tables",
   verbHints: {
     find: ["Run `snowflake-axi pg tables --like <name>` to search tables by name"],
@@ -276,11 +309,15 @@ export const pgCommand = defineCommand("pg", {
       "The connection is pinned to one database (SNOWFLAKE_AXI_PG_DATABASE)",
       'Run `snowflake-axi pg query "SELECT datname FROM pg_database WHERE NOT datistemplate"` to list them',
     ],
-    exec: READ_ONLY_HINTS,
-    execute: READ_ONLY_HINTS,
-    insert: READ_ONLY_HINTS,
-    update: READ_ONLY_HINTS,
-    delete: READ_ONLY_HINTS,
+    execute: EXEC_HINT,
+    insert: EXEC_HINT,
+    update: EXEC_HINT,
+    delete: EXEC_HINT,
+    merge: EXEC_HINT,
+    create: EXEC_HINT,
+    alter: EXEC_HINT,
+    drop: EXEC_HINT,
+    truncate: EXEC_HINT,
   },
   subcommands: {
     tables: {
@@ -355,6 +392,31 @@ export const pgCommand = defineCommand("pg", {
         'snowflake-axi pg query "SELECT schemaname, relname FROM pg_stat_user_tables" --limit 100',
       ],
       run: runQueryVerb,
+    },
+    exec: {
+      description: "Run one write statement against Snowflake Postgres (write; needs the pg.write grant)",
+      positionals: { usage: '"<sql>"', min: 0, max: Number.POSITIVE_INFINITY },
+      flags: {
+        "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char cell truncation on RETURNING rows` },
+        "--timeout": {
+          type: "int",
+          placeholder: "<s>",
+          description: "statement timeout in seconds",
+          default: 60,
+          min: 1,
+          max: 3600,
+        },
+      },
+      notes: [
+        "Refused with WRITE_NOT_ALLOWED until the user grants pg.write (see `snowflake-axi allow --help`).",
+        "Allowed statement heads: INSERT, UPDATE, DELETE, MERGE, CREATE, ALTER, DROP, TRUNCATE; single statement only.",
+        "The session opens read-write; `affected` reports the row count and any RETURNING rows are shown.",
+      ],
+      examples: [
+        "snowflake-axi pg exec \"UPDATE orders SET status = 'shipped' WHERE id = 42\"",
+        "snowflake-axi pg exec \"INSERT INTO tags (name) VALUES ('urgent') RETURNING id\"",
+      ],
+      run: runExecVerb,
     },
   },
 });
