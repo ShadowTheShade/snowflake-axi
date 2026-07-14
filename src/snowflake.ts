@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AxiError } from "axi-sdk-js";
-import { accountUrl, loadConfig } from "./config.js";
+import { accountUrl, loadConfig, readActiveRole } from "./config.js";
 import { currentAccessToken, refreshedAccessToken } from "./oauth.js";
 
 export interface QueryResult {
@@ -86,7 +86,9 @@ async function withAuthRetry<T>(run: () => Promise<T>, role?: string): Promise<T
  */
 export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
-  const role = options.role ?? config.role;
+  // Precedence: an explicit per-command --role, then the persisted active role
+  // (`snowflake-axi role`), then the static SNOWFLAKE_ROLE default.
+  const role = options.role ?? readActiveRole() ?? config.role;
   const body = JSON.stringify({
     statement: sqlText,
     role,

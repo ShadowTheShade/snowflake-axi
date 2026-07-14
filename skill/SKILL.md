@@ -60,6 +60,9 @@ snowflake-axi pg query "UPDATE <table> SET ..."        # write: refused until pg
 snowflake-axi allow                         # write capabilities and their grant status
 snowflake-axi login --role <role>           # browser SSO login via Snowflake OAuth (alternative to PAT auth)
 snowflake-axi logout --role <role>          # remove an OAuth login from the token ring (--all for every login)
+snowflake-axi role                          # show the active role every command runs as, and switchable roles
+snowflake-axi role REPORTER                 # switch the active role (persists; `role default` reverts)
+snowflake-axi role --grants                 # list every role granted to the user (live)
 snowflake-axi context                       # one-line config-derived context (what session hooks print)
 snowflake-axi hooks                         # session-start hook status; install/remove via subcommands
 ```
@@ -84,6 +87,10 @@ snowflake-axi hooks                         # session-start hook status; install
 - `query` runs one statement. Reads (SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN) are free;
   anything else is a write, refused with WRITE_NOT_ALLOWED until the user grants sql.write, then run
   (the token's role stays the hard boundary). A write reports Snowflake's count/status row.
+- `role <name>` sets a persisted active role that every command runs as by default, so `schema`,
+  `tables`, `query`, and the rest need no per-command `--role`; `role` alone shows it, `role default`
+  reverts, and `role --grants` lists roles the user could log in as. In OAuth mode a role is only
+  switchable once it has a login (`login --role <name>`). `--role` on a command still overrides it once.
 - `pg` speaks to Snowflake Postgres directly (SNOWFLAKE_AXI_PG_* keys). `pg query` runs one
   statement: reads (SELECT / WITH / TABLE / VALUES / SHOW / EXPLAIN) run on a server read-only
   session for free; anything else is a write, refused until the user grants pg.write, then run on a

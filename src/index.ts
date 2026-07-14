@@ -14,6 +14,7 @@ import { modelCommand } from "./commands/model.js";
 import { pgCommand } from "./commands/pg.js";
 import { queryCommand } from "./commands/query.js";
 import { resultCommand } from "./commands/result.js";
+import { roleCommand } from "./commands/role.js";
 import { sampleCommand } from "./commands/sample.js";
 import { schemaCommand } from "./commands/schema.js";
 import { semanticsCommand } from "./commands/semantics.js";
@@ -41,6 +42,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   pg: pgCommand,
   login: loginCommand,
   logout: logoutCommand,
+  role: roleCommand,
   allow: allowCommand,
   context: contextCommand,
   hooks: hooksCommand,

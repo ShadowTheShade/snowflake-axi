@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { AxiError } from "axi-sdk-js";
@@ -98,6 +98,38 @@ export function oauthRingKeys(ring: OAuthTokenRing): string[] {
   return Object.keys(ring.entries).sort((a, b) =>
     a === DEFAULT_ROLE_KEY ? -1 : b === DEFAULT_ROLE_KEY ? 1 : a.localeCompare(b),
   );
+}
+
+export function activeRolePath(): string {
+  return join(configDir(), "active-role");
+}
+
+/**
+ * The role chosen by `snowflake-axi role <name>`: the default primary role for
+ * every command, so a role need not be repeated per invocation. Undefined means
+ * no active role is set, and commands fall back to the default login (OAuth) or
+ * SNOWFLAKE_ROLE (PAT). Held in its own file, not the token ring, so a silent
+ * token refresh never has to preserve it and PAT setups can use it too.
+ */
+export function readActiveRole(): string | undefined {
+  let text: string;
+  try {
+    text = readFileSync(activeRolePath(), "utf8");
+  } catch {
+    return undefined;
+  }
+  const role = text.trim();
+  return role.length > 0 ? role : undefined;
+}
+
+/** Persist the active role, or clear it when role is undefined. */
+export function writeActiveRole(role: string | undefined): void {
+  if (role === undefined) {
+    rmSync(activeRolePath(), { force: true });
+    return;
+  }
+  mkdirSync(configDir(), { recursive: true });
+  writeFileSync(activeRolePath(), `${role}\n`);
 }
 
 function parseEnvFile(path: string): Record<string, string> {

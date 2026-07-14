@@ -131,7 +131,8 @@ Every Snowflake OAuth token is pinned to exactly one role (`session:role:<name>`
 
 - `login` adds the default-role login; `login --role <name>` adds that role's login, one browser consent each, every one refreshing silently for its own 90 days.
 - Per-query `--role <name>` selects the matching login from the ring; a role without one fails fast with the exact `login --role` command to run.
-- Without `--role`, the default login runs - or the only login, when a single role-pinned one exists.
+- `snowflake-axi role <name>` sets a persisted **active role** that every command uses as its default primary role, so `schema`, `tables`, `query`, and the rest run as it without a per-command flag; `role` alone shows it, `role default` reverts to the unscoped login, and `role --grants` lists every role the user could log in as. `--role` on a command still overrides the active role for that one run.
+- Without an active role or `--role`, the default login runs - or the only login, when a single role-pinned one exists.
 - `logout [--role <name> | --all]` removes logins; removing the last one deletes the file and the tool falls back to PAT.
 
 Access tokens live about ten minutes and refresh silently before each request that needs it; when a login's refresh token expires (default 90 days) or is revoked, commands fail with the exact login command to rerun.
@@ -177,6 +178,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
 | `query <sql>` | One statement; reads run free, a write (anything not SELECT/WITH/SHOW/DESC/EXPLAIN) needs the `sql.write` grant and reports Snowflake's count/status row; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout`, one-off `--warehouse` / `--role` |
 | `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
+| `role [name]` | Show or switch the persisted active role every command runs as; `role <name>` switches, `role default` reverts, `--grants` lists every role granted to the user |
 | `semantics [name]` | Semantic views account-wide; per view: tables, metrics, dimensions, custom instructions, verified queries (`--like` filters, `--sql <query>` prints blessed SQL) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |

@@ -1,5 +1,5 @@
 import { defineCommand } from "../command.js";
-import { loadConfig, loadPgConfig, oauthRingKeys, readOAuthRing } from "../config.js";
+import { loadConfig, loadPgConfig, oauthRingKeys, readActiveRole, readOAuthRing } from "../config.js";
 import { readGrants } from "../grants.js";
 
 function pgLine(): string | undefined {
@@ -26,6 +26,7 @@ export const contextCommand = defineCommand("context", {
         return "";
       }
       const pg = pgLine();
+      const activeRole = readActiveRole();
       const ring = config.auth === "oauth" ? readOAuthRing() : undefined;
       const entries = ring ? oauthRingKeys(ring).map((key) => ring.entries[key]) : [];
       // The earliest refresh expiry is the first login that will demand a browser.
@@ -43,6 +44,7 @@ export const contextCommand = defineCommand("context", {
         account: config.account,
         user: config.user,
         auth,
+        ...(activeRole !== undefined ? { role: `${activeRole} (active; \`snowflake-axi role\` to change)` } : {}),
         ...(pg !== undefined ? { pg } : {}),
         help: ["Run `snowflake-axi` for live connection context and readable databases"],
       };
