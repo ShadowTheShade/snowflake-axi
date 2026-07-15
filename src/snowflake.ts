@@ -242,6 +242,17 @@ function translateError(status: number, message: string): AxiError {
       [`Have an admin add ${blockedIp} to the network policy attached to the service user`],
     );
   }
+  const compact = message.replace(/\s+/g, " ").trim();
+  // Before the auth check: privilege errors are authorization, not login, and
+  // their text can contain the word "authentication" (e.g. the privilege name
+  // MODIFY PROGRAMMATIC AUTHENTICATION METHODS), which must not read as an
+  // expired session.
+  if (/access control error|insufficient privileges/i.test(compact)) {
+    return new AxiError(compact, "SNOWFLAKE_ERROR", [
+      "An authorization failure, not a login problem: the current primary role lacks the privilege",
+      "Run `snowflake-axi role --grants` to list every granted role, then retry with `--role <name>`",
+    ]);
+  }
   if (status === 401 || status === 403 || /incorrect username or password|authentication/i.test(message)) {
     return new AxiError(
       "Snowflake authentication failed",
@@ -254,7 +265,6 @@ function translateError(status: number, message: string): AxiError {
           ],
     );
   }
-  const compact = message.replace(/\s+/g, " ").trim();
   if (status === 408 || /statement or warehouse timeout/i.test(compact)) {
     return new AxiError(compact, "TIMEOUT", ["Rerun with a higher --timeout <seconds> or narrow the query"]);
   }

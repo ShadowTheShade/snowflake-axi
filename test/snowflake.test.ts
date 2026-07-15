@@ -228,6 +228,21 @@ describe("runQuery over the SQL API", () => {
     });
   });
 
+  it("classifies insufficient privileges as authorization with a role hint, never a login problem", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, {
+        code: "003001",
+        message:
+          "SQL access control error:\nInsufficient privileges to operate on user 'SVC_AGENT'. Your primary role ANALYTICS_READ must have MODIFY PROGRAMMATIC AUTHENTICATION METHODS granted on USER SVC_AGENT.",
+      }),
+    );
+    await expect(runQuery("SHOW USER PROGRAMMATIC ACCESS TOKENS FOR USER SVC_AGENT")).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      message: expect.stringContaining("Insufficient privileges"),
+      suggestions: expect.arrayContaining([expect.stringContaining("role --grants")]),
+    });
+  });
+
   it("suggests a role retry when an object does not exist or is not authorized", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(422, {
