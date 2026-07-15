@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const readActiveRole = vi.hoisted(() => vi.fn());
 vi.mock("../src/config.js", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   loadConfig: () => ({
@@ -11,6 +12,7 @@ vi.mock("../src/config.js", async (importOriginal) => ({
     schema: "PUBLIC",
     modelDirs: [],
   }),
+  readActiveRole,
 }));
 
 import { fetchStatementResult, runQuery } from "../src/snowflake.js";
@@ -43,6 +45,12 @@ function okResult(overrides: Record<string, unknown> = {}): Response {
 
 beforeEach(() => {
   fetchMock.mockReset();
+  readActiveRole.mockReset().mockReturnValue(undefined);
+  vi.stubEnv("SNOWFLAKE_ROLE", "");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("runQuery over the SQL API", () => {
@@ -89,6 +97,29 @@ describe("runQuery over the SQL API", () => {
     fetchMock.mockResolvedValueOnce(okResult());
     await runQuery("SELECT 1", { warehouse: "BIG_WH" });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).warehouse).toBe("BIG_WH");
+  });
+
+  it("prefers the persisted active role over the env-file default", async () => {
+    readActiveRole.mockReturnValue("ACTIVE_ROLE");
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).role).toBe("ACTIVE_ROLE");
+  });
+
+  it("prefers a process-env SNOWFLAKE_ROLE over the persisted active role", async () => {
+    vi.stubEnv("SNOWFLAKE_ROLE", "ENV_ROLE");
+    readActiveRole.mockReturnValue("ACTIVE_ROLE");
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1");
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).role).toBe("ENV_ROLE");
+  });
+
+  it("prefers an explicit --role over every pinned role", async () => {
+    vi.stubEnv("SNOWFLAKE_ROLE", "ENV_ROLE");
+    readActiveRole.mockReturnValue("ACTIVE_ROLE");
+    fetchMock.mockResolvedValueOnce(okResult());
+    await runQuery("SELECT 1", { role: "ONE_OFF" });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body).role).toBe("ONE_OFF");
   });
 
   it("prefers a one-off role switch over the configured role", async () => {
@@ -193,6 +224,21 @@ describe("runQuery over the SQL API", () => {
       suggestions: [
         "The role must be granted to the service user: SHOW GRANTS TO USER <user>",
         "A token minted with ROLE_RESTRICTION is pinned to that role; role switching needs a PAT minted without it",
+      ],
+    });
+  });
+
+  it("suggests a role retry when an object does not exist or is not authorized", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(422, {
+        message: "SQL compilation error: Object 'SECRET_TABLE' does not exist or not authorized.",
+      }),
+    );
+    await expect(runQuery("SELECT * FROM SECRET_TABLE")).rejects.toMatchObject({
+      code: "SNOWFLAKE_ERROR",
+      suggestions: [
+        "Run `snowflake-axi tables --like <name>` to find the right table",
+        "If the name is right, the current role may not see it: `snowflake-axi role --grants` lists every granted role, then retry with `--role <name>`",
       ],
     });
   });

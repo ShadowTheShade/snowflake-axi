@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AxiError } from "axi-sdk-js";
-import { accountUrl, loadConfig, readActiveRole } from "./config.js";
+import { accountUrl, loadConfig, processEnvRole, readActiveRole } from "./config.js";
 import { currentAccessToken, refreshedAccessToken } from "./oauth.js";
 
 export interface QueryResult {
@@ -86,9 +86,10 @@ async function withAuthRetry<T>(run: () => Promise<T>, role?: string): Promise<T
  */
 export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
   const config = loadConfig();
-  // Precedence: an explicit per-command --role, then the persisted active role
-  // (`snowflake-axi role`), then the static SNOWFLAKE_ROLE default.
-  const role = options.role ?? readActiveRole() ?? config.role;
+  // Precedence: an explicit per-command --role, then SNOWFLAKE_ROLE from the
+  // process env (pins one session without touching shared state), then the
+  // persisted active role (`snowflake-axi role`), then the env-file default.
+  const role = options.role ?? processEnvRole() ?? readActiveRole() ?? config.role;
   const body = JSON.stringify({
     statement: sqlText,
     role,
@@ -293,6 +294,7 @@ function translateError(status: number, message: string): AxiError {
   if (/does not exist or not authorized/i.test(compact)) {
     return new AxiError(compact, "SNOWFLAKE_ERROR", [
       "Run `snowflake-axi tables --like <name>` to find the right table",
+      "If the name is right, the current role may not see it: `snowflake-axi role --grants` lists every granted role, then retry with `--role <name>`",
     ]);
   }
   if (status === 0) {

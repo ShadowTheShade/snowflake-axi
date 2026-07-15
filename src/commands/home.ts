@@ -1,4 +1,4 @@
-import { loadConfig, loadPgConfig } from "../config.js";
+import { loadConfig, loadPgConfig, oauthRingKeys, processEnvRole, readActiveRole, readOAuthRing } from "../config.js";
 import { runQuery } from "../snowflake.js";
 
 function pgConfigured(): boolean {
@@ -27,14 +27,20 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
   const current = session.rows[0] ?? {};
   const shown = databases.rows.slice(0, DATABASE_LIMIT);
   const truncated = shown.length < databases.rows.length;
+  // Role surface up front, so an agent orients on access in this one call:
+  // the pinned role is marked, and OAuth mode lists the switchable logins.
+  const pinned = processEnvRole() ?? readActiveRole();
+  const ring = config.auth === "oauth" ? readOAuthRing() : undefined;
+  const logins = ring ? oauthRingKeys(ring) : [];
   return {
     connection: {
       account: current.ACCOUNT ?? config.account,
       user: current.USER ?? config.user,
-      role: current.ROLE ?? "",
+      role: pinned !== undefined ? `${current.ROLE ?? pinned} (active)` : (current.ROLE ?? ""),
       warehouse: current.WAREHOUSE ?? "",
       default: [current.DATABASE, current.SCHEMA].filter(Boolean).join(".") || "(none)",
     },
+    ...(logins.length > 0 ? { logins: logins.join(", ") } : {}),
     ...(truncated ? { count: `${databases.rows.length} databases, first ${shown.length} shown` } : {}),
     databases: shown.map((row) => ({ name: row.name })),
     help: [
@@ -47,6 +53,9 @@ export async function homeView(pluginHelp: string[]): Promise<Record<string, unk
       'Run `snowflake-axi query "SELECT ..."` to run read-only SQL',
       "Run `snowflake-axi semantics` for the curated map of metrics and verified queries",
       "Run `snowflake-axi find <pattern>` to search tables and views by name account-wide",
+      config.auth === "oauth"
+        ? "Run `snowflake-axi role <name>` to switch among the logins; `snowflake-axi login --role <name>` adds one"
+        : "Run `snowflake-axi role <name>` to switch roles; `snowflake-axi role --grants` lists every granted role",
       ...(pgConfigured() ? ["Run `snowflake-axi pg` for the Snowflake Postgres side (read-only)"] : []),
       ...pluginHelp,
     ],

@@ -20,6 +20,7 @@ import { roleCommand } from "../src/commands/role.js";
 const oauthRing = { entries: { default: {}, REPORTER: {}, ANALYST: {} } };
 
 beforeEach(() => {
+  vi.stubEnv("SNOWFLAKE_ROLE", "");
   loadConfig.mockReset().mockReturnValue({ auth: "oauth", user: "ALICE" });
   readOAuthRing.mockReset().mockReturnValue(oauthRing);
   readActiveRole.mockReset().mockReturnValue(undefined);
@@ -39,6 +40,14 @@ describe("role command", () => {
   it("defaults the active label to 'default' when none is set", async () => {
     const output = (await roleCommand.run([])) as Record<string, unknown>;
     expect(output.active).toBe("default");
+    expect(output.override).toBeUndefined();
+  });
+
+  it("surfaces a process-env SNOWFLAKE_ROLE as a session override", async () => {
+    vi.stubEnv("SNOWFLAKE_ROLE", "ENV_ROLE");
+    const output = (await roleCommand.run([])) as Record<string, unknown>;
+    expect(output.override).toContain("SNOWFLAKE_ROLE=ENV_ROLE");
+    vi.unstubAllEnvs();
   });
 
   it("switches to a role that has a login, uppercasing and persisting it", async () => {

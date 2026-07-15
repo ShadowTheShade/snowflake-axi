@@ -6,6 +6,7 @@ import {
   loadConfig,
   oauthRingKeys,
   oauthRoleKey,
+  processEnvRole,
   readActiveRole,
   readOAuthRing,
   writeActiveRole,
@@ -23,8 +24,12 @@ function activeLabel(): string {
 }
 
 function show(oauth: boolean): Record<string, unknown> {
+  const envRole = processEnvRole();
   return {
     active: activeLabel(),
+    ...(envRole !== undefined
+      ? { override: `SNOWFLAKE_ROLE=${envRole} (process env; outranks the active role for this session)` }
+      : {}),
     ...(oauth ? { logins: ringLogins() } : { auth: "PAT" }),
     help: [
       "Switch with `snowflake-axi role <name>`; `snowflake-axi role default` reverts to the default role",
@@ -114,6 +119,7 @@ export const roleCommand = defineCommand("role", {
       "In OAuth mode you can only switch to a role that already has a login in the ring; add one with `snowflake-axi login --role <name>`, and `role default` selects the unscoped login.",
       "In PAT mode any role granted to the user works; there is no offline check, so a role the user lacks fails at query time.",
       "`--role` on an individual command still overrides the active role for that one run.",
+      "Precedence per statement: --role, then SNOWFLAKE_ROLE in the process env (pins one session; the active role is shared machine state), then the active role, then the env-file SNOWFLAKE_ROLE.",
     ],
     examples: [
       "snowflake-axi role",

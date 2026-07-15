@@ -69,7 +69,8 @@ ALTER USER <service user> SET
 
 Granting and revoking Snowflake roles on the user is the single access control; the CLI needs no role configuration at all.
 Statements run as the user's `DEFAULT_ROLE`, and `--role <name>` on `query` and `dbt execute` runs a single statement as another granted role, so privileges stay explicit per action.
-If you prefer every statement to carry the union of all granted roles instead, set `DEFAULT_SECONDARY_ROLES = ('ALL')`.
+When roles are pinned in several places, precedence per statement is: `--role`, then `SNOWFLAKE_ROLE` in the process env (pins one session without touching shared state), then the persisted active role from `snowflake-axi role` (machine-wide, shared by every session), then `SNOWFLAKE_ROLE` from the env file.
+If you prefer every statement to carry the union of all granted roles instead, set `DEFAULT_SECONDARY_ROLES = ('ALL')`; for a dedicated agent user that is usually the right call (see [Provisioning access for agents](#provisioning-access-for-agents)).
 Either way the PAT must be minted without `ROLE_RESTRICTION`: a role-restricted token pins every session to that one role and disables secondary roles entirely.
 
 Optional overrides for setups that want them pinned client-side:
@@ -148,6 +149,34 @@ Constraints worth knowing:
   The ring supplies the login matching the target's `role:` when one exists (`login --role <builder role>` once); otherwise the default login connects and a role mismatch fails with that hint.
   Access tokens live ~10 minutes; connections opened while it is valid keep working, and the profile defaults `reuse_connections: true` so long runs ride them.
 - The refresh tokens on disk are long-lived credentials; the file is 0600 and should be treated like a PAT.
+
+## Provisioning access for agents
+
+The two auth modes trade off differently for agent use, and the difference shows up in how easily an agent lands on the right role.
+
+- A PAT service user reaches any granted role instantly: `--role` and `snowflake-axi role` switch with zero ceremony, so an agent never waits on a human.
+- OAuth runs under your own identity with SSO/MFA, per-role consent, and a real audit trail, but every new role needs a browser login (`login --role <name>`), so an agent is blocked until you add it.
+
+For agent-heavy use, provision a dedicated service user and make role selection a non-problem at the user layer:
+
+```sql
+CREATE USER SVC_AGENT TYPE = SERVICE COMMENT = 'snowflake-axi agent access';
+GRANT ROLE ANALYTICS_READ TO USER SVC_AGENT;
+GRANT ROLE MARTS_READ TO USER SVC_AGENT;
+ALTER USER SVC_AGENT SET
+  DEFAULT_ROLE = ANALYTICS_READ,
+  DEFAULT_WAREHOUSE = <warehouse>,
+  DEFAULT_NAMESPACE = <db.schema>,
+  DEFAULT_SECONDARY_ROLES = ('ALL');
+```
+
+With `DEFAULT_SECONDARY_ROLES = ('ALL')` every statement carries the union of the user's granted roles, so the agent never has to guess which role can see an object.
+On a purpose-built service user that union is exactly the intended boundary: blast radius is controlled by granting the user precisely the roles an agent should reach, and nothing else.
+The usual caution against `('ALL')` applies to human identities, where the union would ambiently include admin roles the person happens to hold; it does not apply to a user that only holds agent-scoped roles.
+Writes that create objects still care about the primary role (it becomes the owner); pick it per statement with `--role` or pin it with `snowflake-axi role`.
+
+Keep `DEFAULT_SECONDARY_ROLES = ()` instead when each statement should be attributable to one explicit role.
+The agent then discovers the right role with `snowflake-axi role --grants` and retries with `--role <name>`; a does-not-exist-or-not-authorized error suggests exactly that.
 
 ## Read-only by default, writes by consent
 

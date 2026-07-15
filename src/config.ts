@@ -122,6 +122,16 @@ export function readActiveRole(): string | undefined {
   return role.length > 0 ? role : undefined;
 }
 
+/**
+ * SNOWFLAKE_ROLE from the process environment only: a per-session pin that
+ * outranks the persisted active role, which is machine-wide state shared by
+ * every concurrent session. The env-file value stays a low-precedence default
+ * through loadConfig().role.
+ */
+export function processEnvRole(): string | undefined {
+  return process.env.SNOWFLAKE_ROLE || undefined;
+}
+
 /** Persist the active role, or clear it when role is undefined. */
 export function writeActiveRole(role: string | undefined): void {
   if (role === undefined) {
