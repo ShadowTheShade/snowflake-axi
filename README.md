@@ -126,7 +126,8 @@ SNOWFLAKE_OAUTH_ROLE_SCOPE=<optional: pin a session role at login>
 
 and runs `snowflake-axi login`.
 The browser opens the account's authorize page (headless machines get the URL printed to paste elsewhere), and the tokens land in `~/.config/snowflake-axi/oauth-tokens.json` with mode 0600.
-The presence of that file makes OAuth the active auth mode; `SNOWFLAKE_AUTH=pat` forces PAT again without deleting it, and `SNOWFLAKE_AUTH=oauth` insists on OAuth.
+Logging in never switches the auth mode by itself when a PAT is configured: PAT stays the default, and `snowflake-axi auth oauth` persists the switch (`auth pat` switches back, `auth default` clears the choice).
+`SNOWFLAKE_AUTH=<mode>` in the process env or the env file overrides the persisted mode, and with no PAT configured the ring activates on its own.
 
 Every Snowflake OAuth token is pinned to exactly one role (`session:role:<name>` is the only session scope the built-in flow accepts), so the token file is a **ring** of independent logins keyed by role:
 
@@ -208,6 +209,7 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `query <sql>` | One statement; reads run free, a write (anything not SELECT/WITH/SHOW/DESC/EXPLAIN) needs the `sql.write` grant and reports Snowflake's count/status row; definitive total counts, 200-char cell truncation, `--full`, `--limit`, `--timeout`, one-off `--warehouse` / `--role` |
 | `result <handle>` | Collect an earlier statement's output without re-running it (handles print to stderr when a query runs long) |
 | `role [name]` | Show or switch the persisted active role every command runs as; `role <name>` switches, `role default` reverts, `--grants` lists every role granted to the user |
+| `auth [mode]` | Show or switch the persisted auth mode (`pat`, `oauth`, `default` to clear); PAT is the default whenever a PAT is configured, and `SNOWFLAKE_AUTH=<mode>` overrides per session |
 | `semantics [name]` | Semantic views account-wide; per view: tables, metrics, dimensions, custom instructions, verified queries (`--like` filters, `--sql <query>` prints blessed SQL) |
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |

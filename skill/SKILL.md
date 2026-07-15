@@ -63,6 +63,7 @@ snowflake-axi logout --role <role>          # remove an OAuth login from the tok
 snowflake-axi role                          # show the active role every command runs as, and switchable roles
 snowflake-axi role REPORTER                 # switch the active role (persists; `role default` reverts)
 snowflake-axi role --grants                 # list every role granted to the user (live)
+snowflake-axi auth                          # show the auth mode; `auth pat|oauth|default` switches (PAT is the default when configured)
 snowflake-axi context                       # one-line config-derived context (what session hooks print)
 snowflake-axi hooks                         # session-start hook status; install/remove via subcommands
 ```

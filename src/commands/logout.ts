@@ -27,6 +27,7 @@ export const logoutCommand = defineCommand("logout", {
     },
     notes: [
       "With a single login, a bare `logout` removes it; with several, choose via --role or --all.",
+      "Removing the last login also clears a persisted `auth oauth` choice, so the machine falls back to PAT.",
       "Deletion is local: Snowflake OAuth has no client revocation endpoint, so the refresh token also dies at its server-side expiry.",
     ],
     examples: ["snowflake-axi logout", "snowflake-axi logout --role REPORTER", "snowflake-axi logout --all"],

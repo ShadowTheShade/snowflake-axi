@@ -216,8 +216,45 @@ describe("auth mode selection", () => {
     const loadConfig = await freshLoadConfig();
     expect(loadError(loadConfig)).toMatchObject({
       code: "CONFIG_ERROR",
-      suggestions: ["Run `snowflake-axi login` to sign in with the browser"],
+      suggestions: expect.arrayContaining(["Run `snowflake-axi login` to sign in with the browser"]),
     });
+  });
+
+  it("prefers PAT over an existing token file when a PAT is configured", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile });
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", account: "ACC", token: "TOKEN" });
+  });
+
+  it("honors a persisted oauth mode past a configured PAT", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile, "auth-mode": "oauth\n" });
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "oauth", account: "OAUTH_ACC", user: "ALICE" });
+  });
+
+  it("lets SNOWFLAKE_AUTH beat the persisted mode", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile, "auth-mode": "oauth\n" });
+    vi.stubEnv("SNOWFLAKE_AUTH", "pat");
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", account: "ACC", token: "TOKEN" });
+  });
+
+  it("ignores an invalid persisted auth-mode file and falls back to the default", async () => {
+    stubConfigHome({ "oauth-tokens.json": tokenFile, "auth-mode": "keypair\n" });
+    vi.stubEnv("SNOWFLAKE_ACCOUNT", "ACC");
+    vi.stubEnv("SNOWFLAKE_USER", "USER");
+    vi.stubEnv("SNOWFLAKE_TOKEN", "TOKEN");
+    const loadConfig = await freshLoadConfig();
+    expect(loadConfig()).toMatchObject({ auth: "pat", token: "TOKEN" });
   });
 
   it("rejects an unknown SNOWFLAKE_AUTH value", async () => {

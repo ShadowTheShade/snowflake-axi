@@ -100,6 +100,38 @@ export function oauthRingKeys(ring: OAuthTokenRing): string[] {
   );
 }
 
+export function authModePath(): string {
+  return join(configDir(), "auth-mode");
+}
+
+/** The auth mode persisted by `snowflake-axi auth <mode>`; undefined means no explicit choice. */
+export function readAuthMode(): AuthMode | undefined {
+  let text: string;
+  try {
+    text = readFileSync(authModePath(), "utf8");
+  } catch {
+    return undefined;
+  }
+  const mode = text.trim().toLowerCase();
+  return mode === "pat" || mode === "oauth" ? mode : undefined;
+}
+
+/** Persist the auth mode, or clear it when mode is undefined. */
+export function writeAuthMode(mode: AuthMode | undefined): void {
+  if (mode === undefined) {
+    rmSync(authModePath(), { force: true });
+    return;
+  }
+  mkdirSync(configDir(), { recursive: true });
+  writeFileSync(authModePath(), `${mode}\n`);
+}
+
+/** Whether a PAT is resolvable from the process env, the env file, or the snow CLI config. */
+export function patConfigured(): boolean {
+  const file = parseEnvFile(envFilePath());
+  return Boolean(process.env.SNOWFLAKE_TOKEN || file.SNOWFLAKE_TOKEN || snowCliConnection().SNOWFLAKE_TOKEN);
+}
+
 export function activeRolePath(): string {
   return join(configDir(), "active-role");
 }
@@ -280,18 +312,22 @@ export function loadPgConfig(): PgConfig {
 let cached: Config | undefined;
 
 /**
- * OAuth is selected by an explicit SNOWFLAKE_AUTH, or by a token file left by
- * `snowflake-axi login`; PAT remains the default otherwise, so existing
- * setups are untouched.
+ * Auth mode precedence: SNOWFLAKE_AUTH (process env or env file), then the
+ * mode persisted by `snowflake-axi auth`, then PAT whenever a PAT is
+ * configured. The OAuth ring only activates by itself when no PAT exists, so
+ * a browser login never silently retargets a machine set up for the PAT.
  */
-function resolveAuthMode(explicit: string | undefined, ring: OAuthTokenRing | undefined): AuthMode {
+function resolveAuthMode(explicit: string | undefined, hasPat: boolean, ring: OAuthTokenRing | undefined): AuthMode {
   const mode = explicit?.toLowerCase();
   if (mode !== undefined && mode !== "pat" && mode !== "oauth") {
     throw new AxiError(`Invalid SNOWFLAKE_AUTH '${explicit}'`, "CONFIG_ERROR", [
       `Fix SNOWFLAKE_AUTH in ${envFilePath()}: pat or oauth`,
     ]);
   }
-  return mode ?? (ring && Object.keys(ring.entries).length > 0 ? "oauth" : "pat");
+  const chosen = (mode as AuthMode | undefined) ?? readAuthMode();
+  if (chosen !== undefined) return chosen;
+  if (hasPat) return "pat";
+  return ring && Object.keys(ring.entries).length > 0 ? "oauth" : "pat";
 }
 
 export function loadConfig(): Config {
@@ -301,15 +337,16 @@ export function loadConfig(): Config {
   const get = (key: string) => process.env[key] || file[key] || toml[key] || undefined;
 
   const ring = readOAuthRing();
-  const auth = resolveAuthMode(get("SNOWFLAKE_AUTH"), ring);
+  const auth = resolveAuthMode(get("SNOWFLAKE_AUTH"), Boolean(get("SNOWFLAKE_TOKEN")), ring);
   let account: string;
   let user: string;
   let token: string | undefined;
   if (auth === "oauth") {
     const identity = ring ? ring.entries[oauthRingKeys(ring)[0]] : undefined;
     if (!identity) {
-      throw new AxiError("SNOWFLAKE_AUTH=oauth but no OAuth login was found", "CONFIG_ERROR", [
+      throw new AxiError("Auth mode is oauth but no OAuth login was found", "CONFIG_ERROR", [
         "Run `snowflake-axi login` to sign in with the browser",
+        "Or run `snowflake-axi auth pat` (or unset SNOWFLAKE_AUTH) to use PAT auth",
       ]);
     }
     // The logins own identity in OAuth mode: every token in the ring was

@@ -1,5 +1,5 @@
 import { defineCommand } from "../command.js";
-import { oauthRingKeys, oauthTokenPath, readOAuthRing } from "../config.js";
+import { oauthRingKeys, oauthTokenPath, patConfigured, readAuthMode, readOAuthRing } from "../config.js";
 import { login } from "../oauth.js";
 
 export const loginCommand = defineCommand("login", {
@@ -26,13 +26,20 @@ export const loginCommand = defineCommand("login", {
         refreshTokenExpires: new Date(tokens.refreshTokenExpiresAt).toISOString(),
         logins: ring ? oauthRingKeys(ring) : [],
         tokenFile: oauthTokenPath(),
+        ...(patConfigured() && readAuthMode() !== "oauth"
+          ? {
+              help: [
+                "PAT stays the default auth mode; run `snowflake-axi auth oauth` to switch, or SNOWFLAKE_AUTH=oauth for one shell",
+              ],
+            }
+          : {}),
       };
     },
     notes: [
       "Needs SNOWFLAKE_ACCOUNT and SNOWFLAKE_OAUTH_CLIENT_ID in the env file; the README's OAuth setup covers the one-time security integration.",
       "SNOWFLAKE_OAUTH_ROLE_SCOPE in the env file sets a default for --role.",
       "Every OAuth token is pinned to one role, so the token file is a ring of logins: `login --role <name>` once per role, and per-query --role picks the matching login.",
-      "The ring makes OAuth the active auth mode; SNOWFLAKE_AUTH=pat forces PAT again without deleting it, and `snowflake-axi logout` removes logins.",
+      "Logging in never switches the auth mode by itself when a PAT is configured: run `snowflake-axi auth oauth` to make OAuth active, or SNOWFLAKE_AUTH=oauth per shell; with no PAT the ring activates on its own. `snowflake-axi logout` removes logins.",
       "Snowflake blocks ACCOUNTADMIN and SECURITYADMIN as the primary role over OAuth by default.",
     ],
     examples: ["snowflake-axi login", "snowflake-axi login --role REPORTER"],

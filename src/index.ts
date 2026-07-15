@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { runAxiCli } from "axi-sdk-js";
 import type { CommandSpec } from "./command.js";
 import { allowCommand } from "./commands/allow.js";
+import { authCommand } from "./commands/auth.js";
 import { contextCommand } from "./commands/context.js";
 import { dbtCommand } from "./commands/dbt.js";
 import { findCommand } from "./commands/find.js";
@@ -42,6 +43,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   pg: pgCommand,
   login: loginCommand,
   logout: logoutCommand,
+  auth: authCommand,
   role: roleCommand,
   allow: allowCommand,
   context: contextCommand,

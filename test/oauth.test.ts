@@ -234,6 +234,24 @@ describe("logout", () => {
     expect(() => statSync(tokenPath())).toThrow();
   });
 
+  it("clears a persisted oauth mode when the last login goes", async () => {
+    writeTokens();
+    const modePath = join(configHome, "snowflake-axi", "auth-mode");
+    writeFileSync(modePath, "oauth\n");
+    const { logout } = await freshOAuth();
+    logout();
+    expect(() => statSync(modePath)).toThrow();
+  });
+
+  it("keeps a persisted oauth mode while logins remain", async () => {
+    writeRing({ default: tokenFile(), REPORTER: { ...tokenFile(), roleScope: "REPORTER" } });
+    const modePath = join(configHome, "snowflake-axi", "auth-mode");
+    writeFileSync(modePath, "oauth\n");
+    const { logout } = await freshOAuth();
+    logout({ role: "REPORTER" });
+    expect(readFileSync(modePath, "utf8").trim()).toBe("oauth");
+  });
+
   it("demands a choice when several logins exist", async () => {
     writeRing({ default: tokenFile(), REPORTER: { ...tokenFile(), roleScope: "REPORTER" } });
     const { logout } = await freshOAuth();

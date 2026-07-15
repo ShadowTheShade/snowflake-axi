@@ -13,7 +13,9 @@ import {
   oauthRingKeys,
   oauthRoleKey,
   oauthTokenPath,
+  readAuthMode,
   readOAuthRing,
+  writeAuthMode,
   writeOAuthRing,
 } from "./config.js";
 
@@ -327,7 +329,7 @@ export function logout(options: { role?: string; all?: boolean } = {}): LogoutRe
   if (!ring || Object.keys(ring.entries).length === 0) throw notLoggedIn();
   const keys = oauthRingKeys(ring);
   if (options.all || (options.role === undefined && keys.length === 1)) {
-    rmSync(oauthTokenPath(), { force: true });
+    removeRingFile();
     return { removed: keys, remaining: [] };
   }
   if (options.role === undefined) {
@@ -343,9 +345,16 @@ export function logout(options: { role?: string; all?: boolean } = {}): LogoutRe
   delete ring.entries[key];
   const remaining = oauthRingKeys(ring);
   if (remaining.length === 0) {
-    rmSync(oauthTokenPath(), { force: true });
+    removeRingFile();
   } else {
     writeOAuthRing(ring);
   }
   return { removed: [key], remaining };
+}
+
+// A persisted oauth mode with no logins would fail every command, so the last
+// logout clears it and the machine falls back to the default (PAT when configured).
+function removeRingFile(): void {
+  rmSync(oauthTokenPath(), { force: true });
+  if (readAuthMode() === "oauth") writeAuthMode(undefined);
 }
