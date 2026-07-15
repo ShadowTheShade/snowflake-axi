@@ -24,7 +24,7 @@ import { warehousesCommand } from "./commands/warehouses.js";
 import { envFilePath } from "./config.js";
 import { loadPlugins } from "./plugins.js";
 
-const DESCRIPTION = "Read-only Snowflake explorer for agents; TOON output, SELECT-only";
+const DESCRIPTION = "Snowflake explorer for agents; TOON output, reads free, writes by consent";
 
 export const CORE_COMMANDS: Record<string, CommandSpec> = {
   tables: tablesCommand,

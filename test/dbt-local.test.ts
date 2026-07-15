@@ -25,9 +25,12 @@ import {
 } from "../src/dbt-local.js";
 
 let dir: string;
+let stderrSpy: { mockRestore(): void };
 const originalPath = process.env.PATH;
 
 beforeEach(() => {
+  // runDbt streams the dbt log to stderr for humans; keep the test run quiet.
+  stderrSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
   dir = mkdtempSync(join(tmpdir(), "axi-dbt-local-"));
   loadConfig.mockReset();
   loadConfig.mockReturnValue({
@@ -44,6 +47,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  stderrSpy.mockRestore();
   process.env.PATH = originalPath;
   delete process.env.FAKE_CAPTURE;
   rmSync(dir, { recursive: true, force: true });
