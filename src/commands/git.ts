@@ -1,5 +1,5 @@
 import { type CommandArgs, defineCommand } from "../command.js";
-import { humanBytes } from "../format.js";
+import { humanBytes, startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
 import { parseScope, resolveRepoName, safeLike, scopeClause, scopeLabel } from "../names.js";
 import { runQuery } from "../snowflake.js";
@@ -71,7 +71,7 @@ async function fetch(args: CommandArgs): Promise<Record<string, unknown>> {
   const role = args.str("--role");
   const timeoutSeconds = args.int("--timeout");
 
-  const started = Date.now();
+  const elapsed = startTimer();
   await runQuery(`ALTER GIT REPOSITORY ${repo.fqn} FETCH`, { role, timeoutSeconds });
   const { rows } = await runQuery(
     `SHOW GIT REPOSITORIES LIKE '${repo.name}' IN SCHEMA ${repo.database}.${repo.schema}`,
@@ -84,7 +84,7 @@ async function fetch(args: CommandArgs): Promise<Record<string, unknown>> {
     repository: repo.fqn,
     fetched: info ? String(info.last_fetched_at) : "ok",
     ...(info?.repository_size ? { size: humanBytes(Number(info.repository_size)) } : {}),
-    elapsed: `${((Date.now() - started) / 1000).toFixed(1)}s`,
+    elapsed: elapsed(),
     help: [`Run \`snowflake-axi git branches ${repo.fqn}\` to see the refreshed branches`],
   };
 }

@@ -1,6 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import { type ActionDef, type CommandArgs, defineCommand, type FlagDef } from "../command.js";
 import { type LocalVerb, runLocalDbt } from "../dbt-local.js";
+import { startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
 import { IDENTIFIER, parseScope, resolveRepoName, type Scope, safeLike, scopeClause, scopeLabel } from "../names.js";
 import { runQuery } from "../snowflake.js";
@@ -141,7 +142,7 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
 
   const fqn = fqnOf(match);
   const literal = dbtArgs.replace(/\\/g, "\\\\").replace(/'/g, "''");
-  const started = Date.now();
+  const elapsed = startTimer();
   const { rows } = await runQuery(`EXECUTE DBT PROJECT ${fqn} args='${literal}'`, {
     timeoutSeconds: args.int("--timeout"),
     role,
@@ -149,7 +150,7 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
   return {
     project: fqn,
     args: dbtArgs,
-    elapsed: `${((Date.now() - started) / 1000).toFixed(1)}s`,
+    elapsed: elapsed(),
     ...(rows.length > 0 ? { rows } : { note: "Snowflake returned no output rows" }),
   };
 }
@@ -262,7 +263,7 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
   const source = resolveSource(match?.default_version_source_location_uri, fqn, args);
   const location = gitLocation(source);
   const create = `CREATE DBT PROJECT ${fqn} FROM '${location}'${targetClause(args.str("--target"))}${integrationsClause(args.str("--integrations"))}`;
-  const started = Date.now();
+  const elapsed = startTimer();
 
   if (!args.bool("--no-fetch")) {
     await runQuery(`ALTER GIT REPOSITORY ${source.repo} FETCH`, { role, timeoutSeconds });
@@ -291,7 +292,7 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
     ...(latest?.alias ? { alias: latest.alias } : {}),
     ...(commit ? { commit } : {}),
     is_default: String(latest?.is_default) === "true",
-    elapsed: `${((Date.now() - started) / 1000).toFixed(1)}s`,
+    elapsed: elapsed(),
     help: [`Run \`snowflake-axi dbt execute ${fqn.split(".").pop()} --args "build"\` to run this version`],
   };
 }

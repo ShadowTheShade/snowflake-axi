@@ -1,5 +1,6 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
+import { startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
 import { CELL_LIMIT, presentRows, presentWrite } from "../present.js";
 import { runQuery } from "../snowflake.js";
@@ -17,16 +18,15 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const { sql, kind } = classifyStatement(rawSql);
   if (kind === "write") requireGrant("sql.write");
 
-  const started = Date.now();
+  const elapsed = startTimer();
   const result = await runQuery(sql, {
     maxRows: limit,
     timeoutSeconds: timeout,
     warehouse: args.str("--warehouse"),
     role: args.str("--role"),
   });
-  const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
   const presented = kind === "write" ? presentWrite(result, full) : presentRows(result, full);
-  return { ...presented, elapsed };
+  return { ...presented, elapsed: elapsed() };
 }
 
 export const queryCommand = defineCommand("query", {

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { cellValue, coerceNumeric, humanBytes, money, pct, shapeRows } from "../src/format.js";
+import { cellValue, coerceNumeric, humanBytes, money, pct, shapeRows, startTimer } from "../src/format.js";
+
+describe("startTimer", () => {
+  it("renders a non-negative elapsed-seconds label", () => {
+    const elapsed = startTimer();
+    expect(elapsed()).toMatch(/^\d+\.\d+s$/);
+  });
+});
 
 describe("humanBytes", () => {
   it("formats with one decimal below 100, none above", () => {

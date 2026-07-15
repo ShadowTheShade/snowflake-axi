@@ -68,6 +68,12 @@ export function shapeRows(
   return { rows: shaped, truncatedCells };
 }
 
+/** Elapsed-seconds label on the monotonic clock, immune to wall-clock steps (WSL NTP corrections). */
+export function startTimer(): () => string {
+  const started = performance.now();
+  return () => `${((performance.now() - started) / 1000).toFixed(1)}s`;
+}
+
 export function money(value: unknown): number {
   return Math.round(Number(value ?? 0));
 }

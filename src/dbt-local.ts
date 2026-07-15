@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { parse as parseYaml } from "yaml";
 import { type AuthMode, envFilePath, loadConfig } from "./config.js";
+import { startTimer } from "./format.js";
 import { hasLogin, refreshedAccessToken } from "./oauth.js";
 
 /**
@@ -309,7 +310,9 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   if (options.fullRefresh) argv.push("--full-refresh");
   if (options.failFast) argv.push("--fail-fast");
 
+  // Wall clock for the run_results.json mtime check; the elapsed label runs on the monotonic clock.
   const started = Date.now();
+  const timer = startTimer();
   let exit: DbtExit;
   try {
     writeFileSync(join(profilesDir, "profiles.yml"), `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
@@ -327,7 +330,7 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
     rmSync(profilesDir, { recursive: true, force: true });
   }
 
-  const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
+  const elapsed = timer();
   const command = `dbt ${options.verb}${options.select ? ` --select ${options.select}` : ""}`;
   const results = readRunResults(project, started);
 
