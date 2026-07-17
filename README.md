@@ -22,9 +22,12 @@ snowflake-axi semantics       # semantic views: the curated map of tables, metri
 snowflake-axi warehouses      # states + 7-day credit burn
 snowflake-axi model my_model  # local dbt model SQL behind a table
 snowflake-axi dbt             # dbt Projects on Snowflake, account-wide
+snowflake-axi dbt ls --select +my_model             # list local nodes matching a selector, without running them
 snowflake-axi dbt compile     # compile the local dbt repo with the tool's credentials
+snowflake-axi dbt compiled my_model                 # print my_model's compiled SQL from the last compile
+snowflake-axi dbt state --target prod --into prod-artifacts   # stash prod's manifest.json as a --defer reference
 snowflake-axi dbt run --select my_model             # materialize local models into the chosen target (write, gated)
-snowflake-axi dbt build --select my_model           # models + tests + seeds + snapshots in DAG order (write, gated)
+snowflake-axi dbt build --select my_model --defer --state prod-artifacts   # slim build against a reference manifest (write, gated)
 snowflake-axi dbt deploy MY_PROJECT --branch main   # cut a new project version from git (write, gated)
 snowflake-axi git             # git repositories on Snowflake, account-wide
 snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO  # branches with commit hashes
@@ -214,8 +217,11 @@ The grants file (`~/.config/snowflake-axi/grants`) expresses user consent, not s
 | `warehouses` | Warehouse states, 7-day credit burn, usage-guidance comments; `--full` |
 | `model <name>` | dbt model SQL found by filename across `SNOWFLAKE_AXI_MODEL_DIRS` |
 | `dbt` / `dbt describe <name>` | dbt Projects on Snowflake: account-wide list; versions, source, and integrations per project |
-| `dbt compile` | Compile the local dbt project against Snowflake (read-only); `--select`, `--exclude`, `--target`, `--project-dir` |
-| `dbt run` / `build` / `test` / `seed` / `snapshot` | The local dbt write verbs, 1:1 with dbt's own; all need the `dbt.build` grant; `--select`, `--full-refresh`, `--fail-fast` |
+| `dbt ls` | List local dbt nodes matching a selector without running them (read-only); `--select`, `--exclude`, `--resource-type`, `--state`, `--target` |
+| `dbt compile` | Compile the local dbt project against Snowflake (read-only); `--select`, `--exclude`, `--target`, `--defer`, `--state`, `--project-dir` |
+| `dbt compiled <model>` | Print a model's compiled SQL from the last compile (read-only) |
+| `dbt state --into <dir>` | Compile the whole project and stash its `manifest.json` as a `--defer`/`--state` reference (read-only) |
+| `dbt run` / `build` / `test` / `seed` / `snapshot` | The local dbt write verbs, 1:1 with dbt's own; all need the `dbt.build` grant; `--select`, `--full-refresh`, `--fail-fast`, `--defer`, `--state`, `--favor-state`; `run`/`build` also take `--empty` |
 | `dbt execute <name>` | Run a dbt command in a deployed project; write, needs the `dbt.execute` grant; `--role` when the default role cannot execute it |
 | `dbt deploy <name>` | Create a project or cut a new version from its git repository (FETCH + CREATE / ADD VERSION, no upload); write, needs the `dbt.deploy` grant; `--branch`, `--repo`, `--path`, `--target`, `--integrations`, `--role` |
 | `dbt drop <name>` | Drop a dbt project and all its versions (idempotent); write, needs the `dbt.drop` grant; `--role` |
@@ -247,8 +253,9 @@ Output for a write is whatever Snowflake returns: a single DML count row (`numbe
 
 ## Local dbt
 
-`dbt compile` and the write verbs `run`, `build`, `test`, `seed`, and `snapshot` spawn the local dbt CLI on the project in the working directory (or `--project-dir`), so agents can iterate on model code before it is committed or deployed anywhere.
+`dbt ls`, `compile`, `state`, and the write verbs `run`, `build`, `test`, `seed`, and `snapshot` spawn the local dbt CLI on the project in the working directory (or `--project-dir`), so agents can iterate on model code before it is committed or deployed anywhere.
 The verbs mirror dbt's own 1:1, so "run my_model" means exactly what it means in dbt; `run` materializes without tests, `build` adds each node's tests and gates downstream nodes on them.
+`dbt ls` resolves the DAG and prints the node names a selector matches without running anything, so an agent can scope a build first (`--select +my_model` for ancestors, `my_model+` for descendants); `dbt compiled <model>` prints a model's compiled SQL straight from `target/compiled` so there is no file tree to hunt through.
 
 They are built for the dbt Projects on Snowflake layout, where the repo commits a credential-less `profiles.yml` (empty `account`/`user`) because the server-side session injects identity.
 Locally, snowflake-axi plays that same role: it reads the repo's targets (role, database, schema, warehouse), replaces every auth field with its own credentials in an ephemeral profile directory handed to the dbt subprocess, and deletes it after the run.
@@ -257,6 +264,13 @@ No `~/.dbt/profiles.yml` or `DBT_PROFILES_DIR` is needed, and existing ones are 
 
 The target comes from `--target`, falling back to `SNOWFLAKE_AXI_DBT_TARGET` from the config; with neither set the command fails loud and lists the repo's targets.
 Pointing the default at a personal sandbox target keeps agent iteration isolated from shared schemas.
+
+`--defer --state <dir>` is the slim-build pattern: build only the selected nodes and resolve their unselected upstream `ref()`s to the `manifest.json` in `<dir>` (a prior, typically production, run) instead of rebuilding the whole DAG.
+`--favor-state` prefers that manifest even when a node also exists in the target, and implies `--defer`.
+`--state` is useful on its own too, enabling `state:` selectors such as `--select state:modified+`.
+The state directory is validated before dbt spawns: a missing directory or absent `manifest.json` fails loud rather than surfacing as an opaque dbt error.
+`dbt state --target prod --into <dir>` produces that reference in one step: it compiles the whole project against the target and copies the fresh `manifest.json` into `<dir>`, ready to pass back as `--state`.
+On `run` and `build`, `--empty` materializes each model with a `LIMIT 0` query, validating its SQL and schema against the real upstream tables at near-zero warehouse cost without building any rows.
 
 dbt's own log streams to stderr for humans; stdout carries a compact per-node summary parsed from `run_results.json`, and node failures become a structured `DBT_ERROR` listing each failing node.
 The dbt CLI must be installed separately, for example as a uv tool: dbt-core with the dbt-snowflake adapter alongside.
@@ -284,6 +298,14 @@ SNOWFLAKE_AXI_PG_SSLMODE=<optional: disable, require (default), verify-full>
 
 `EXPLAIN ANALYZE` is classified by what it wraps, because it executes what it plans: `EXPLAIN ANALYZE SELECT` is a read, but `EXPLAIN ANALYZE INSERT` (or the `CREATE TABLE AS` form that slips past even a read-only transaction, verified live) counts as a write.
 Both paths run through the extended protocol, which makes multi-statement SQL a server-side error, and the Postgres role's own privileges remain the hard boundary on what a write can actually change.
+
+Head-keyword classification cannot see side effects reached *through* a read: a `SELECT` that calls a `VOLATILE` function performing `INSERT`/`TRUNCATE`, or a `WITH` wrapping a data-modifying CTE, reads by prefix but writes in fact, so the read-only session rejects it.
+Pass `--write` to route such a statement through the read-write session (gated by `pg.write`); it then reports as a write - command tag, `affected`, and any returned rows.
+The read-only default is preserved for every ordinary read, and the Postgres role's privileges stay the hard boundary regardless.
+
+```sh
+snowflake-axi pg query --write "SELECT dim_ingest.refresh_all('light')"   # invoke a writing function
+```
 
 Row counts in `pg tables` and `pg schema` are planner estimates (`reltuples`); a blank means the table was never analyzed.
 `pg query` streams through a cursor and probes one row past `--limit`, so it reports either an exact `N (complete)` or an honest `first N rows (more exist)` without ever buffering an unbounded result.

@@ -5,7 +5,9 @@ vi.mock("../src/snowflake.js", () => ({ runQuery }));
 const requireGrant = vi.hoisted(() => vi.fn());
 vi.mock("../src/grants.js", () => ({ requireGrant }));
 const runLocalDbt = vi.hoisted(() => vi.fn());
-vi.mock("../src/dbt-local.js", () => ({ runLocalDbt }));
+const runLocalList = vi.hoisted(() => vi.fn());
+const readCompiledSql = vi.hoisted(() => vi.fn());
+vi.mock("../src/dbt-local.js", () => ({ runLocalDbt, runLocalList, readCompiledSql }));
 
 import { dbtCommand } from "../src/commands/dbt.js";
 
@@ -36,6 +38,8 @@ beforeEach(() => {
   runQuery.mockReset();
   requireGrant.mockReset();
   runLocalDbt.mockReset();
+  runLocalList.mockReset();
+  readCompiledSql.mockReset();
 });
 
 describe("dbt list", () => {
@@ -432,6 +436,19 @@ describe("dbt local verbs", () => {
     expect(runQuery).not.toHaveBeenCalled();
   });
 
+  it("parses the deferral flags on build and compile and forwards them to runLocalDbt", async () => {
+    runLocalDbt.mockResolvedValue({ ok: true });
+    await dbtCommand.run(["build", "--select", "fct_sales+", "--defer", "--state", "prod", "--favor-state"]);
+    expect(runLocalDbt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: "build", select: "fct_sales+", defer: true, state: "prod", favorState: true }),
+    );
+
+    await dbtCommand.run(["compile", "--state", "prod"]);
+    expect(runLocalDbt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: "compile", state: "prod", defer: false, favorState: false }),
+    );
+  });
+
   it("compile is ungated and offers --full-refresh only where dbt accepts it", async () => {
     runLocalDbt.mockResolvedValue({ ok: true });
     await dbtCommand.run(["compile"]);
@@ -444,6 +461,63 @@ describe("dbt local verbs", () => {
       code: "VALIDATION_ERROR",
       message: expect.stringContaining("--full-refresh"),
     });
+  });
+
+  it("offers --empty on run and build only, materializing at near-zero cost", async () => {
+    runLocalDbt.mockResolvedValue({ ok: true });
+    await dbtCommand.run(["build", "--select", "m", "--empty"]);
+    expect(runLocalDbt).toHaveBeenLastCalledWith(expect.objectContaining({ verb: "build", empty: true }));
+    await dbtCommand.run(["run", "--empty"]);
+    expect(runLocalDbt).toHaveBeenLastCalledWith(expect.objectContaining({ verb: "run", empty: true }));
+    await expect(dbtCommand.run(["test", "--empty"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: expect.stringContaining("--empty"),
+    });
+  });
+});
+
+describe("dbt ls", () => {
+  it("is ungated and forwards selectors to runLocalList", async () => {
+    runLocalList.mockResolvedValue({ ok: true });
+    await dbtCommand.run(["ls", "--select", "+fct_sales", "--resource-type", "model", "--state", "prod"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(runLocalList).toHaveBeenLastCalledWith(
+      expect.objectContaining({ select: "+fct_sales", resourceType: "model", state: "prod", timeoutSeconds: 300 }),
+    );
+    expect(runQuery).not.toHaveBeenCalled();
+  });
+});
+
+describe("dbt compiled", () => {
+  it("reads the model's compiled SQL, ungated", async () => {
+    readCompiledSql.mockReturnValue({ model: "fct_sales", sql: "select 1" });
+    const output = (await dbtCommand.run(["compiled", "fct_sales", "--project-dir", "sub"])) as Record<string, unknown>;
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(readCompiledSql).toHaveBeenCalledWith("fct_sales", "sub");
+    expect(output.sql).toBe("select 1");
+  });
+
+  it("requires a model positional", async () => {
+    await expect(dbtCommand.run(["compiled"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(readCompiledSql).not.toHaveBeenCalled();
+  });
+});
+
+describe("dbt state", () => {
+  it("compiles the whole project into the reference directory, ungated", async () => {
+    runLocalDbt.mockResolvedValue({ manifest: "prod-artifacts/manifest.json" });
+    await dbtCommand.run(["state", "--target", "prod", "--into", "prod-artifacts"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(runLocalDbt).toHaveBeenLastCalledWith(
+      expect.objectContaining({ verb: "compile", target: "prod", captureManifestTo: "prod-artifacts" }),
+    );
+    // The reference must cover the whole DAG, so it is never narrowed by --select.
+    expect(runLocalDbt.mock.calls[0][0]).not.toHaveProperty("select", expect.anything());
+  });
+
+  it("requires --into before compiling", async () => {
+    await expect(dbtCommand.run(["state", "--target", "prod"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(runLocalDbt).not.toHaveBeenCalled();
   });
 });
 
@@ -460,7 +534,9 @@ describe("dbt verb hints", () => {
   it("names the valid subcommands for unwrapped verbs", async () => {
     await expect(dbtCommand.run(["docs", "generate"])).rejects.toMatchObject({
       suggestions: expect.arrayContaining([
-        expect.stringContaining("Valid subcommands: list, describe, compile, run, build, test, seed, snapshot"),
+        expect.stringContaining(
+          "Valid subcommands: list, describe, ls, compile, compiled, state, run, build, test, seed, snapshot",
+        ),
       ]),
     });
   });

@@ -1,5 +1,15 @@
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { AxiError } from "axi-sdk-js";
@@ -51,6 +61,22 @@ export interface LocalDbtOptions {
   exclude?: string;
   fullRefresh?: boolean;
   failFast?: boolean;
+  empty?: boolean;
+  defer?: boolean;
+  state?: string;
+  favorState?: boolean;
+  /** After a successful compile, copy the fresh manifest.json into this directory (for `dbt state`). */
+  captureManifestTo?: string;
+  timeoutSeconds: number;
+}
+
+export interface LocalListOptions {
+  projectDir?: string;
+  target?: string;
+  select?: string;
+  exclude?: string;
+  resourceType?: string;
+  state?: string;
   timeoutSeconds: number;
 }
 
@@ -197,18 +223,30 @@ export function buildEphemeralProfile(
 interface DbtExit {
   code: number;
   tail: string[];
+  /** Full stdout, kept apart from stderr so verbs like `ls` can parse it (the human log goes to stderr). */
+  stdout: string;
 }
 
 function runDbt(argv: string[], env: NodeJS.ProcessEnv, timeoutSeconds: number): Promise<DbtExit> {
   return new Promise((resolveExit, reject) => {
     const child = spawn("dbt", argv, { env, stdio: ["ignore", "pipe", "pipe"] });
     let buffered = "";
-    const capture = (chunk: Buffer) => {
+    let stdout = "";
+    // Everything dbt emits is mirrored to our stderr so the human sees the live
+    // log without polluting our stdout (the JSON result); stdout is also kept
+    // whole for verbs whose payload is what dbt prints, like `ls`.
+    const onStdout = (chunk: Buffer) => {
+      process.stderr.write(chunk);
+      const text = chunk.toString();
+      buffered = (buffered + text).slice(-16384);
+      stdout = (stdout + text).slice(-1_000_000);
+    };
+    const onStderr = (chunk: Buffer) => {
       process.stderr.write(chunk);
       buffered = (buffered + chunk.toString()).slice(-16384);
     };
-    child.stdout?.on("data", capture);
-    child.stderr?.on("data", capture);
+    child.stdout?.on("data", onStdout);
+    child.stderr?.on("data", onStderr);
     let timedOut = false;
     const timer = setTimeout(() => {
       timedOut = true;
@@ -237,7 +275,7 @@ function runDbt(argv: string[], env: NodeJS.ProcessEnv, timeoutSeconds: number):
         );
         return;
       }
-      resolveExit({ code: code ?? 1, tail: buffered.split("\n") });
+      resolveExit({ code: code ?? 1, tail: buffered.split("\n"), stdout });
     });
   });
 }
@@ -295,7 +333,67 @@ function errorLines(tail: string[]): string[] {
   return picked.length > 0 ? picked : ["dbt produced no output; run dbt manually in the project to inspect"];
 }
 
-export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<string, unknown>> {
+/**
+ * Validates a --state directory and resolves it to an absolute path. --state
+ * names a directory holding a manifest.json from a prior run; both `--defer`
+ * and `state:` selectors read it. Checked before dbt spawns so a bad reference
+ * fails loud here rather than as an opaque dbt stack trace.
+ */
+export function resolveStateDir(state: string | undefined): string | undefined {
+  if (state === undefined) return undefined;
+  const dir = resolve(state);
+  if (!existsSync(dir) || !statSync(dir).isDirectory()) {
+    throw new AxiError(`--state is not a directory: ${dir}`, "NOT_FOUND", [
+      "Point --state at the directory that contains manifest.json, not at the file itself",
+    ]);
+  }
+  if (!existsSync(join(dir, "manifest.json"))) {
+    throw new AxiError(`No manifest.json in --state directory ${dir}`, "NOT_FOUND", [
+      "--state reads manifest.json from this directory; copy one there from a prior dbt run or compile",
+    ]);
+  }
+  return dir;
+}
+
+/**
+ * dbt deferral. `--defer` resolves unselected `ref()`s to the --state manifest
+ * (typically production) instead of building those upstreams - what keeps a
+ * narrow `--select` run cheap. `--favor-state` only means anything alongside
+ * deferral, so it turns it on.
+ */
+export function resolveDeferral(options: LocalDbtOptions): { state?: string; defer: boolean; favorState: boolean } {
+  const favorState = options.favorState ?? false;
+  const defer = (options.defer ?? false) || favorState;
+  if (defer && options.state === undefined) {
+    throw new AxiError(
+      `${options.favorState ? "--favor-state" : "--defer"} needs a reference manifest`,
+      "VALIDATION_ERROR",
+      [
+        "Pass --state <dir>: a directory holding a manifest.json from a prior run (e.g. production) to resolve unselected ref()s against",
+        "Produce one with `snowflake-axi dbt state --target <prod> --into <dir>`",
+      ],
+    );
+  }
+  return { state: resolveStateDir(options.state), defer, favorState };
+}
+
+interface PreparedRun {
+  project: DbtProject;
+  targetName: string;
+  outputs: Record<string, Record<string, unknown>>;
+  auth: AuthMode;
+  /** dbt argv prefix through --target, ready for verb-specific flags to be appended. */
+  argvHead: string[];
+  env: NodeJS.ProcessEnv;
+  profilesDir: string;
+}
+
+/**
+ * Shared setup for every local dbt spawn: resolve the project and target, write
+ * the ephemeral credentialed profile, and pick the credential env. The caller
+ * owns the profilesDir and must delete it after the run (try/finally).
+ */
+async function prepareLocalRun(verb: string, options: { projectDir?: string; target?: string }): Promise<PreparedRun> {
   const config = loadConfig();
   const project = resolveProject(options.projectDir);
   const outputs = loadOutputs(project);
@@ -303,29 +401,73 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   const profile = buildEphemeralProfile(project.profileName, targetName, outputs[targetName], config, config.auth);
 
   const profilesDir = mkdtempSync(join(tmpdir(), "snowflake-axi-dbt-"));
-  const argv = ["--no-use-colors", options.verb, "--profiles-dir", profilesDir, "--project-dir", project.dir];
-  argv.push("--target", targetName);
+  writeFileSync(join(profilesDir, "profiles.yml"), `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
+  // dbt connects as the target's role, so prefer that role's login from the
+  // token ring; without one, the default login runs and a mismatch surfaces
+  // Snowflake's role error with the login --role hint below.
+  const targetRole = outputs[targetName].role;
+  const tokenRole = typeof targetRole === "string" && hasLogin(targetRole) ? targetRole : undefined;
+  const credentialEnv =
+    config.auth === "oauth"
+      ? { [DBT_TOKEN_ENV]: await refreshedAccessToken(tokenRole) }
+      : { [DBT_PASSWORD_ENV]: config.token };
+  return {
+    project,
+    targetName,
+    outputs,
+    auth: config.auth,
+    argvHead: [
+      "--no-use-colors",
+      verb,
+      "--profiles-dir",
+      profilesDir,
+      "--project-dir",
+      project.dir,
+      "--target",
+      targetName,
+    ],
+    env: { ...process.env, ...credentialEnv },
+    profilesDir,
+  };
+}
+
+// A compile always refreshes target/manifest.json; `dbt state` copies it into a
+// reference directory so a later --defer run can resolve unselected refs to it.
+function captureManifest(project: DbtProject, into: string): string {
+  const source = join(project.dir, project.targetPath, "manifest.json");
+  if (!existsSync(source)) {
+    throw new AxiError(`Compile did not produce ${source}`, "NOT_FOUND", [
+      "Expected dbt to write target/manifest.json; run `snowflake-axi dbt compile` and check the log",
+    ]);
+  }
+  const dir = resolve(into);
+  mkdirSync(dir, { recursive: true });
+  const dest = join(dir, "manifest.json");
+  copyFileSync(source, dest);
+  return dest;
+}
+
+export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<string, unknown>> {
+  const deferral = resolveDeferral(options);
+  const prepared = await prepareLocalRun(options.verb, options);
+  const { project, targetName, auth, argvHead, env, profilesDir } = prepared;
+
+  const argv = [...argvHead];
   if (options.select) argv.push("--select", options.select);
   if (options.exclude) argv.push("--exclude", options.exclude);
   if (options.fullRefresh) argv.push("--full-refresh");
   if (options.failFast) argv.push("--fail-fast");
+  if (options.empty) argv.push("--empty");
+  if (deferral.state) argv.push("--state", deferral.state);
+  if (deferral.defer) argv.push("--defer");
+  if (deferral.favorState) argv.push("--favor-state");
 
   // Wall clock for the run_results.json mtime check; the elapsed label runs on the monotonic clock.
   const started = Date.now();
   const timer = startTimer();
   let exit: DbtExit;
   try {
-    writeFileSync(join(profilesDir, "profiles.yml"), `${JSON.stringify(profile, null, 2)}\n`, { mode: 0o600 });
-    // dbt connects as the target's role, so prefer that role's login from the
-    // token ring; without one, the default login runs and a mismatch surfaces
-    // Snowflake's role error with the login --role hint below.
-    const targetRole = outputs[targetName].role;
-    const tokenRole = typeof targetRole === "string" && hasLogin(targetRole) ? targetRole : undefined;
-    const credentialEnv =
-      config.auth === "oauth"
-        ? { [DBT_TOKEN_ENV]: await refreshedAccessToken(tokenRole) }
-        : { [DBT_PASSWORD_ENV]: config.token };
-    exit = await runDbt(argv, { ...process.env, ...credentialEnv }, options.timeoutSeconds);
+    exit = await runDbt(argv, env, options.timeoutSeconds);
   } finally {
     rmSync(profilesDir, { recursive: true, force: true });
   }
@@ -347,7 +489,7 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   }
   if (exit.code !== 0) {
     const roleHint =
-      config.auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
+      auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
         ? [
             "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
           ]
@@ -369,6 +511,18 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
     };
   }
   if (options.verb === "compile") {
+    if (options.captureManifestTo !== undefined) {
+      const manifest = captureManifest(project, options.captureManifestTo);
+      return {
+        ...base,
+        count: `${results.length} nodes compiled`,
+        manifest,
+        elapsed,
+        help: [
+          `Use it as a --defer reference: \`snowflake-axi dbt build --select <model> --defer --state ${options.captureManifestTo}\``,
+        ],
+      };
+    }
     return {
       ...base,
       count: `${results.length} nodes compiled`,
@@ -386,5 +540,100 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
     nodes: shown,
     ...(results.length > shown.length ? { note: `first ${shown.length} of ${results.length} nodes shown` } : {}),
     elapsed,
+  };
+}
+
+// dbt writes resource names to stdout (one per line, whitespace-free); the human
+// log goes to stderr. --quiet keeps stdout to the list alone across dbt versions.
+const NODE_NAME = /^\S+$/;
+
+export async function runLocalList(options: LocalListOptions): Promise<Record<string, unknown>> {
+  const stateDir = resolveStateDir(options.state);
+  const prepared = await prepareLocalRun("ls", options);
+  const { project, targetName, auth, argvHead, env, profilesDir } = prepared;
+
+  const argv = ["--quiet", ...argvHead, "--output", "name"];
+  if (options.select) argv.push("--select", options.select);
+  if (options.exclude) argv.push("--exclude", options.exclude);
+  if (options.resourceType) argv.push("--resource-type", options.resourceType);
+  if (stateDir) argv.push("--state", stateDir);
+
+  let exit: DbtExit;
+  try {
+    exit = await runDbt(argv, env, options.timeoutSeconds);
+  } finally {
+    rmSync(profilesDir, { recursive: true, force: true });
+  }
+
+  if (exit.code !== 0) {
+    const roleHint =
+      auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
+        ? [
+            "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
+          ]
+        : [];
+    throw new AxiError(`dbt ls on ${project.name} failed`, "DBT_ERROR", [...errorLines(exit.tail), ...roleHint]);
+  }
+
+  const nodes = exit.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => NODE_NAME.test(line));
+  const base = { project: project.name, target: targetName };
+  if (nodes.length === 0) {
+    return {
+      ...base,
+      count: `0 nodes matched${options.select ? ` --select '${options.select}'` : ""}`,
+      help: ["Check the selector: dbt matches by name, +ancestors/descendants+, tag:, path:, state:"],
+    };
+  }
+  const shown = nodes.slice(0, MAX_NODE_ROWS);
+  return {
+    ...base,
+    count: `${nodes.length} nodes`,
+    nodes: shown,
+    ...(nodes.length > shown.length ? { note: `first ${shown.length} of ${nodes.length} nodes shown` } : {}),
+  };
+}
+
+function findCompiled(dir: string, filename: string, found: string[]): void {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) findCompiled(full, filename, found);
+    else if (entry.name === filename) found.push(full);
+  }
+}
+
+const MAX_COMPILED_CHARS = 20000;
+
+export function readCompiledSql(name: string, projectDirFlag: string | undefined): Record<string, unknown> {
+  const project = resolveProject(projectDirFlag);
+  const compiledRoot = join(project.dir, project.targetPath, "compiled");
+  if (!existsSync(compiledRoot)) {
+    throw new AxiError(`No compiled output in ${project.targetPath}/compiled`, "NOT_FOUND", [
+      "Run `snowflake-axi dbt compile` first; it writes compiled SQL there",
+    ]);
+  }
+  const filename = name.endsWith(".sql") ? name : `${name}.sql`;
+  const matches: string[] = [];
+  findCompiled(compiledRoot, filename, matches);
+  if (matches.length === 0) {
+    throw new AxiError(`No compiled SQL for '${name}'`, "NOT_FOUND", [
+      `Check the model name, or recompile: \`snowflake-axi dbt compile --select ${name}\``,
+    ]);
+  }
+  if (matches.length > 1) {
+    throw new AxiError(`${matches.length} compiled files match '${filename}'`, "AMBIGUOUS", [
+      ...matches.map((path) => path.slice(project.dir.length + 1)),
+    ]);
+  }
+  const path = matches[0].slice(project.dir.length + 1);
+  const sql = readFileSync(matches[0], "utf8");
+  const truncated = sql.length > MAX_COMPILED_CHARS;
+  return {
+    model: name.replace(/\.sql$/, ""),
+    path,
+    ...(truncated ? { note: `SQL truncated to ${MAX_COMPILED_CHARS} chars; read ${path} for the full file` } : {}),
+    sql: truncated ? sql.slice(0, MAX_COMPILED_CHARS) : sql,
   };
 }

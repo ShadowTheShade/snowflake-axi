@@ -175,7 +175,8 @@ export function translatePgError(err: unknown): AxiError {
   }
   if (code === "25006" || /read-only.*transaction/i.test(message)) {
     return new AxiError("The Postgres session is read-only, so write statements are rejected", "READ_ONLY", [
-      "Hand write statements to the operator to run manually",
+      "If this SELECT/WITH invokes a writing function or a data-modifying CTE, rerun with --write (needs the pg.write grant)",
+      "Otherwise hand write statements to the operator to run manually",
     ]);
   }
   if (code === "57014") {

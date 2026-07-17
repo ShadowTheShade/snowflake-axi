@@ -19,9 +19,12 @@ import {
   DBT_PASSWORD_ENV,
   DBT_TOKEN_ENV,
   loadOutputs,
+  readCompiledSql,
+  resolveDeferral,
   resolveProject,
   resolveTarget,
   runLocalDbt,
+  runLocalList,
 } from "../src/dbt-local.js";
 
 let dir: string;
@@ -194,6 +197,64 @@ describe("buildEphemeralProfile", () => {
   });
 });
 
+describe("resolveDeferral", () => {
+  function stateDir(withManifest = true): string {
+    const state = join(dir, "state");
+    mkdirSync(state, { recursive: true });
+    if (withManifest) writeFileSync(join(state, "manifest.json"), "{}");
+    return state;
+  }
+
+  it("passes through when no deferral is requested", () => {
+    expect(resolveDeferral({ verb: "build", timeoutSeconds: 30 })).toEqual({ defer: false, favorState: false });
+  });
+
+  it("requires --state for --defer", () => {
+    const error = expectAxi(
+      () => resolveDeferral({ verb: "build", defer: true, timeoutSeconds: 30 }),
+      "VALIDATION_ERROR",
+      "--defer needs a reference manifest",
+    );
+    expect(error.suggestions[0]).toContain("--state");
+  });
+
+  it("treats --favor-state as requiring deferral too", () => {
+    expectAxi(
+      () => resolveDeferral({ verb: "build", favorState: true, timeoutSeconds: 30 }),
+      "VALIDATION_ERROR",
+      "--favor-state needs a reference manifest",
+    );
+    const state = stateDir();
+    expect(resolveDeferral({ verb: "build", favorState: true, state, timeoutSeconds: 30 })).toEqual({
+      state,
+      defer: true,
+      favorState: true,
+    });
+  });
+
+  it("rejects a state path that is not a directory holding manifest.json", () => {
+    expectAxi(
+      () => resolveDeferral({ verb: "build", defer: true, state: join(dir, "missing"), timeoutSeconds: 30 }),
+      "NOT_FOUND",
+      "not a directory",
+    );
+    expectAxi(
+      () => resolveDeferral({ verb: "build", defer: true, state: stateDir(false), timeoutSeconds: 30 }),
+      "NOT_FOUND",
+      "No manifest.json",
+    );
+  });
+
+  it("resolves a valid state directory to an absolute path, usable without --defer", () => {
+    const state = stateDir();
+    expect(resolveDeferral({ verb: "build", state, timeoutSeconds: 30 })).toEqual({
+      state,
+      defer: false,
+      favorState: false,
+    });
+  });
+});
+
 /** Installs a fake `dbt` on PATH; capture lands in $FAKE_CAPTURE. */
 function installShim(script: string): string {
   const binDir = join(dir, "bin");
@@ -268,6 +329,65 @@ describe("runLocalDbt", () => {
     expect(argv).toContain("--target");
     const ephemeralDir = readFileSync(join(capture, "profiles_dir.txt"), "utf8");
     expect(existsSync(ephemeralDir)).toBe(false);
+  });
+
+  it("forwards deferral flags to dbt once the state manifest is validated", async () => {
+    writeProjectFiles(PROFILES);
+    const state = join(dir, "prod-artifacts");
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, "manifest.json"), "{}");
+    const capture = shimWritingResults(runResults([{ id: "model.demo.fct_sales", status: "success" }]), 0);
+
+    await runLocalDbt({
+      verb: "build",
+      projectDir: dir,
+      target: "dev",
+      select: "fct_sales+",
+      defer: true,
+      state,
+      favorState: true,
+      timeoutSeconds: 30,
+    });
+
+    const argv = readFileSync(join(capture, "argv.txt"), "utf8").split("\n");
+    expect(argv).toContain("--defer");
+    expect(argv).toContain("--favor-state");
+    expect(argv[argv.indexOf("--state") + 1]).toBe(state);
+  });
+
+  it("refuses --defer without --state before spawning dbt", async () => {
+    writeProjectFiles(PROFILES);
+    const capture = installShim("exit 0");
+    await expect(
+      runLocalDbt({ verb: "build", projectDir: dir, target: "dev", defer: true, timeoutSeconds: 30 }),
+    ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+    expect(existsSync(join(capture, "argv.txt"))).toBe(false);
+  });
+
+  it("forwards --empty to dbt", async () => {
+    writeProjectFiles(PROFILES);
+    const capture = shimWritingResults(runResults([{ id: "model.demo.stg_flavors", status: "success" }]), 0);
+    await runLocalDbt({ verb: "run", projectDir: dir, target: "dev", empty: true, timeoutSeconds: 30 });
+    expect(readFileSync(join(capture, "argv.txt"), "utf8").split("\n")).toContain("--empty");
+  });
+
+  it("captures the fresh manifest into the reference dir after a compile", async () => {
+    writeProjectFiles(PROFILES);
+    writeFileSync(join(dir, "results.json"), runResults([{ id: "model.demo.stg_flavors", status: "success" }]));
+    installShim(`mkdir -p "${join(dir, "target")}"
+cp "${join(dir, "results.json")}" "${join(dir, "target", "run_results.json")}"
+printf '{}' > "${join(dir, "target", "manifest.json")}"
+exit 0`);
+    const into = join(dir, "prod-artifacts");
+    const output = await runLocalDbt({
+      verb: "compile",
+      projectDir: dir,
+      target: "dev",
+      captureManifestTo: into,
+      timeoutSeconds: 30,
+    });
+    expect(output.manifest).toBe(join(into, "manifest.json"));
+    expect(readFileSync(join(into, "manifest.json"), "utf8")).toBe("{}");
   });
 
   it("reports per-node failures as a structured error", async () => {
@@ -386,5 +506,114 @@ exit 2`);
     installShim("exec sleep 30");
     const promise = runLocalDbt({ verb: "compile", projectDir: dir, target: "dev", timeoutSeconds: 1 });
     await expect(promise).rejects.toMatchObject({ code: "TIMEOUT" });
+  });
+});
+
+describe("runLocalList", () => {
+  it("parses whitespace-free node names from stdout and forwards ls flags", async () => {
+    writeProjectFiles(PROFILES);
+    const capture = installShim(`printf 'stg_flavors\\nfct_sales\\n'
+exit 0`);
+    const output = await runLocalList({
+      projectDir: dir,
+      target: "dev",
+      select: "+fct_sales",
+      resourceType: "model",
+      timeoutSeconds: 30,
+    });
+    expect(output.count).toBe("2 nodes");
+    expect(output.nodes).toEqual(["stg_flavors", "fct_sales"]);
+
+    const argv = readFileSync(join(capture, "argv.txt"), "utf8").split("\n");
+    expect(argv).toContain("ls");
+    expect(argv).toContain("--quiet");
+    expect(argv[argv.indexOf("--output") + 1]).toBe("name");
+    expect(argv[argv.indexOf("--select") + 1]).toBe("+fct_sales");
+    expect(argv[argv.indexOf("--resource-type") + 1]).toBe("model");
+  });
+
+  it("validates --state and forwards it for state: selectors", async () => {
+    writeProjectFiles(PROFILES);
+    const state = join(dir, "state");
+    mkdirSync(state, { recursive: true });
+    writeFileSync(join(state, "manifest.json"), "{}");
+    const capture = installShim(`printf 'fct_sales\\n'
+exit 0`);
+    await runLocalList({ projectDir: dir, target: "dev", select: "state:modified+", state, timeoutSeconds: 30 });
+    const argv = readFileSync(join(capture, "argv.txt"), "utf8").split("\n");
+    expect(argv[argv.indexOf("--state") + 1]).toBe(state);
+
+    await expect(
+      runLocalList({ projectDir: dir, target: "dev", state: join(dir, "missing"), timeoutSeconds: 30 }),
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+  });
+
+  it("reports an empty selection definitively", async () => {
+    writeProjectFiles(PROFILES);
+    installShim("exit 0");
+    const output = await runLocalList({ projectDir: dir, target: "dev", select: "nope", timeoutSeconds: 30 });
+    expect(output.count).toBe("0 nodes matched --select 'nope'");
+  });
+
+  it("surfaces a dbt failure as DBT_ERROR", async () => {
+    writeProjectFiles(PROFILES);
+    installShim(`echo "Compilation Error in model foo" >&2
+exit 2`);
+    await expect(runLocalList({ projectDir: dir, target: "dev", timeoutSeconds: 30 })).rejects.toMatchObject({
+      code: "DBT_ERROR",
+    });
+  });
+});
+
+describe("readCompiledSql", () => {
+  function withProject(): void {
+    writeFileSync(join(dir, "dbt_project.yml"), "name: demo\nprofile: demo\n");
+  }
+  function writeCompiled(relDir: string, file: string, sql: string): void {
+    const full = join(dir, "target", "compiled", relDir);
+    mkdirSync(full, { recursive: true });
+    writeFileSync(join(full, file), sql);
+  }
+
+  it("returns the single matching compiled file with its project-relative path", () => {
+    withProject();
+    writeCompiled(join("demo", "models"), "fct_sales.sql", "select 42");
+    const output = readCompiledSql("fct_sales", dir);
+    expect(output.model).toBe("fct_sales");
+    expect(output.sql).toBe("select 42");
+    expect(output.path).toBe(join("target", "compiled", "demo", "models", "fct_sales.sql"));
+  });
+
+  it("accepts a name with the .sql suffix already", () => {
+    withProject();
+    writeCompiled(join("demo", "models"), "fct_sales.sql", "select 1");
+    expect(readCompiledSql("fct_sales.sql", dir).model).toBe("fct_sales");
+  });
+
+  it("fails NOT_FOUND before any compile", () => {
+    withProject();
+    expectAxi(() => readCompiledSql("fct_sales", dir), "NOT_FOUND", "No compiled output");
+  });
+
+  it("fails NOT_FOUND for an unknown model", () => {
+    withProject();
+    mkdirSync(join(dir, "target", "compiled"), { recursive: true });
+    expectAxi(() => readCompiledSql("ghost", dir), "NOT_FOUND", "No compiled SQL for 'ghost'");
+  });
+
+  it("lists matches when a name is ambiguous across paths", () => {
+    withProject();
+    writeCompiled(join("demo", "models", "staging"), "dup.sql", "1");
+    writeCompiled(join("demo", "models", "marts"), "dup.sql", "2");
+    const error = expectAxi(() => readCompiledSql("dup", dir), "AMBIGUOUS", "2 compiled files match");
+    expect(error.suggestions).toHaveLength(2);
+  });
+
+  it("truncates very large SQL with a pointer to the file", () => {
+    withProject();
+    writeCompiled(join("demo", "models"), "big.sql", "x".repeat(25000));
+    const output = readCompiledSql("big", dir);
+    expect((output.sql as string).length).toBe(20000);
+    expect(output.note).toContain("truncated");
   });
 });

@@ -278,6 +278,56 @@ describe("pg query", () => {
     expect(output.affected).toBe(1);
     expect(output.returned).toEqual([{ id: 7, name: "urgent" }]);
   });
+
+  it("routes a writing SELECT through the read-write session under --write", async () => {
+    runPgWrite.mockResolvedValueOnce({
+      command: "SELECT",
+      rowCount: 1,
+      rows: [{ _refresh_one: "42" }],
+      numericColumns: new Set(["_refresh_one"]),
+    });
+    const output = (await pgCommand.run([
+      "query",
+      "--write",
+      "SELECT dim_ingest._refresh_one('entities', true)",
+    ])) as Record<string, unknown>;
+    expect(requireGrant).toHaveBeenCalledWith("pg.write");
+    expect(runPgQuery).not.toHaveBeenCalled();
+    expect(runPgWrite.mock.calls[0][0]).toBe("SELECT dim_ingest._refresh_one('entities', true)");
+    expect(output.command).toBe("SELECT");
+    expect(output.affected).toBe(1);
+    expect(output.returned).toEqual([{ _refresh_one: 42 }]);
+  });
+
+  it("routes a data-modifying CTE (WITH) through the read-write session under --write", async () => {
+    runPgWrite.mockResolvedValueOnce({
+      command: "INSERT",
+      rowCount: 2,
+      rows: [{ id: "1" }, { id: "2" }],
+      numericColumns: new Set(["id"]),
+    });
+    await pgCommand.run(["query", "--write", "WITH x AS (INSERT INTO t VALUES (1),(2) RETURNING id) SELECT * FROM x"]);
+    expect(runPgQuery).not.toHaveBeenCalled();
+    expect(runPgWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it("gates --write behind pg.write before touching the connection", async () => {
+    requireGrant.mockImplementation(() => {
+      throw new AxiError("Write capability 'pg.write' is not granted", "WRITE_NOT_ALLOWED", []);
+    });
+    await expect(pgCommand.run(["query", "--write", "SELECT do_write()"])).rejects.toMatchObject({
+      code: "WRITE_NOT_ALLOWED",
+    });
+    expect(runPgWrite).not.toHaveBeenCalled();
+    expect(runPgQuery).not.toHaveBeenCalled();
+  });
+
+  it("still reads a plain SELECT without --write, needing no grant", async () => {
+    runPgQuery.mockResolvedValueOnce({ rows: [{ n: "1" }], complete: true, numericColumns: new Set(["n"]) });
+    await pgCommand.run(["query", "SELECT 1 AS n"]);
+    expect(requireGrant).not.toHaveBeenCalled();
+    expect(runPgWrite).not.toHaveBeenCalled();
+  });
 });
 
 describe("pg verb hints", () => {

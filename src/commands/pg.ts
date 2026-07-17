@@ -264,6 +264,7 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   const limit = args.int("--limit");
   const timeout = args.int("--timeout");
   const full = args.bool("--full");
+  const forceWrite = args.bool("--write");
 
   const rawSql = args.positionals.join(" ").trim();
   if (!rawSql) {
@@ -272,7 +273,10 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   const { sql, kind } = classifyPgStatement(rawSql);
 
   const started = Date.now();
-  if (kind === "read") {
+  // A SELECT/WITH that invokes a writing function or a data-modifying CTE reads
+  // by prefix but writes in fact, so --write forces the read-write session and
+  // the grant; the server privileges remain the hard boundary either way.
+  if (kind === "read" && !forceWrite) {
     const result = await runPgQuery(sql, { maxRows: limit, timeoutSeconds: timeout });
     const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
     return { ...presentPgRows(result, full, limit), elapsed };
@@ -364,6 +368,11 @@ export const pgCommand = defineCommand("pg", {
           max: 1000,
         },
         "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char cell truncation` },
+        "--write": {
+          type: "boolean",
+          description:
+            "run on the read-write session even for a SELECT/WITH - needed when it invokes a writing function or a data-modifying CTE (needs the pg.write grant)",
+        },
         "--timeout": {
           type: "int",
           placeholder: "<s>",
@@ -376,12 +385,13 @@ export const pgCommand = defineCommand("pg", {
       notes: [
         "Reads (SELECT, WITH, TABLE, VALUES, SHOW, EXPLAIN) run on a server read-only session and need no grant.",
         "Any other statement is a write: refused with WRITE_NOT_ALLOWED until the user grants pg.write, then run on a read-write session that reports the command tag, `affected` count, and any RETURNING rows.",
+        "A SELECT/WITH that actually writes - it calls a VOLATILE function or wraps a data-modifying CTE - reads by prefix and fails on the read-only session; pass --write to route it through the read-write session (needs pg.write). It then reports as a write (command tag, affected, returned rows).",
         "Single statement only; the Postgres role's own privileges stay the hard boundary.",
       ],
       examples: [
         'snowflake-axi pg query "SELECT count(*) FROM orders"',
         "snowflake-axi pg query \"UPDATE orders SET status = 'shipped' WHERE id = 42\"",
-        'snowflake-axi pg query "ANALYZE interco.interco_ar_ap_doc"',
+        "snowflake-axi pg query --write \"SELECT dim_ingest.refresh_all('light')\"",
       ],
       run: runQueryVerb,
     },

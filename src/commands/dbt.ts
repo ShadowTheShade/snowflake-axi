@@ -1,6 +1,6 @@
 import { AxiError } from "axi-sdk-js";
 import { type ActionDef, type CommandArgs, defineCommand, type FlagDef } from "../command.js";
-import { type LocalVerb, runLocalDbt } from "../dbt-local.js";
+import { type LocalVerb, readCompiledSql, runLocalDbt, runLocalList } from "../dbt-local.js";
 import { startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
 import { IDENTIFIER, parseScope, resolveRepoName, type Scope, safeLike, scopeClause, scopeLabel } from "../names.js";
@@ -315,6 +315,30 @@ const PROJECT_DIR_FLAG: FlagDef = {
   description: "dbt project root (default: current directory)",
 };
 
+const STATE_FLAG: FlagDef = {
+  type: "string",
+  placeholder: "<dir>",
+  description:
+    "directory holding a reference manifest.json; required by --defer and also enables state: selectors like --select state:modified+",
+};
+
+// Deferral flags shared by compile and the local write verbs. --defer is the
+// slim-build pattern: build only the selected nodes and resolve their upstream
+// ref()s to a reference manifest, so the run does not rebuild the whole DAG.
+const DEFER_FLAGS: Record<string, FlagDef> = {
+  "--defer": {
+    type: "boolean",
+    description:
+      "resolve unselected ref()s to the --state manifest (a prior/production run) instead of building them - what makes a narrow --select run cheap",
+  },
+  "--state": STATE_FLAG,
+  "--favor-state": {
+    type: "boolean",
+    description:
+      "prefer the --state manifest for unselected ref()s even when the node also exists in the target (implies --defer)",
+  },
+};
+
 function localTimeoutFlag(defaultSeconds: number): FlagDef {
   return {
     type: "int",
@@ -335,6 +359,42 @@ function runLocal(args: CommandArgs, verb: LocalVerb): Promise<Record<string, un
     exclude: args.str("--exclude"),
     fullRefresh: args.bool("--full-refresh"),
     failFast: args.bool("--fail-fast"),
+    empty: args.bool("--empty"),
+    defer: args.bool("--defer"),
+    state: args.str("--state"),
+    favorState: args.bool("--favor-state"),
+    timeoutSeconds: args.int("--timeout"),
+  });
+}
+
+function listNodes(args: CommandArgs): Promise<Record<string, unknown>> {
+  return runLocalList({
+    projectDir: args.str("--project-dir"),
+    target: args.str("--target"),
+    select: args.str("--select"),
+    exclude: args.str("--exclude"),
+    resourceType: args.str("--resource-type"),
+    state: args.str("--state"),
+    timeoutSeconds: args.int("--timeout"),
+  });
+}
+
+function captureState(args: CommandArgs): Promise<Record<string, unknown>> {
+  const into = args.str("--into");
+  if (into === undefined) {
+    throw new AxiError(
+      "--into is required: the directory to write the reference manifest.json into",
+      "VALIDATION_ERROR",
+      ["Example: snowflake-axi dbt state --target prod --into prod-artifacts"],
+    );
+  }
+  // Whole-project compile: a --defer reference must describe every node a later
+  // run might resolve a ref() to, so it is deliberately not narrowed by --select.
+  return runLocalDbt({
+    verb: "compile",
+    projectDir: args.str("--project-dir"),
+    target: args.str("--target"),
+    captureManifestTo: into,
     timeoutSeconds: args.int("--timeout"),
   });
 }
@@ -344,7 +404,7 @@ function runLocal(args: CommandArgs, verb: LocalVerb): Promise<Record<string, un
 function localWrite(
   verb: LocalVerb,
   description: string,
-  options: { fullRefresh?: boolean; notes?: string[]; examples: string[] },
+  options: { fullRefresh?: boolean; empty?: boolean; notes?: string[]; examples: string[] },
 ): ActionDef {
   return {
     description: `${description} (write; dbt.build grant)`,
@@ -355,12 +415,23 @@ function localWrite(
       ...(options.fullRefresh
         ? { "--full-refresh": { type: "boolean", description: "rebuild incremental models from scratch" } as FlagDef }
         : {}),
+      ...(options.empty
+        ? {
+            "--empty": {
+              type: "boolean",
+              description:
+                "materialize with a LIMIT 0 query - validates the model's SQL and schema at near-zero cost, no rows built",
+            } as FlagDef,
+          }
+        : {}),
       "--fail-fast": { type: "boolean", description: "stop at the first failure" },
+      ...DEFER_FLAGS,
       "--project-dir": PROJECT_DIR_FLAG,
       "--timeout": localTimeoutFlag(1800),
     },
     notes: [
       "Refused with WRITE_NOT_ALLOWED until the user grants dbt.build (see `snowflake-axi allow --help`).",
+      "With `--select <model> --defer --state <dir>`, unselected upstream ref()s resolve to that manifest instead of being built, so a narrow run stays cheap.",
       ...(options.notes ?? []),
     ],
     examples: options.examples,
@@ -396,11 +467,11 @@ const NO_CREDS_HINT = (verb: string) =>
 const UNWRAPPED_HINT = "This dbt verb is outside the wrapped surface";
 
 export const dbtCommand = defineCommand("dbt", {
-  summary: "dbt Projects on Snowflake plus local dbt: compile, and (gated) run, build, test, seed, snapshot",
+  summary:
+    "dbt Projects on Snowflake plus local dbt: ls, compile, compiled, state, and (gated) run, build, test, seed, snapshot",
   description:
-    "List, inspect, execute, deploy, and drop dbt Projects on Snowflake, and compile, run, build, test, seed, or snapshot the local dbt project in the working directory",
+    "List, inspect, execute, deploy, and drop dbt Projects on Snowflake; and ls, compile, read compiled SQL, capture a state manifest, run, build, test, seed, or snapshot the local dbt project in the working directory",
   verbHints: {
-    ls: [NO_CREDS_HINT("ls")],
     parse: [NO_CREDS_HINT("parse")],
     deps: [NO_CREDS_HINT("deps")],
     clean: [NO_CREDS_HINT("clean")],
@@ -408,9 +479,9 @@ export const dbtCommand = defineCommand("dbt", {
     init: [NO_CREDS_HINT("init")],
     show: [
       UNWRAPPED_HINT,
-      "Preview built tables with `snowflake-axi sample <table>`, or compile and inspect target/compiled SQL",
+      "Preview built tables with `snowflake-axi sample <table>`, or read compiled SQL with `snowflake-axi dbt compiled <model>`",
     ],
-    docs: [UNWRAPPED_HINT, "Compiled SQL lands in target/compiled after `snowflake-axi dbt compile`"],
+    docs: [UNWRAPPED_HINT, "Read a model's compiled SQL with `snowflake-axi dbt compiled <model>` after a compile"],
     retry: [
       UNWRAPPED_HINT,
       "Re-run `snowflake-axi dbt build` with the same --select; completed incremental work is preserved",
@@ -445,24 +516,85 @@ export const dbtCommand = defineCommand("dbt", {
       examples: ["snowflake-axi dbt describe MY_PROJECT"],
       run: describe,
     },
+    ls: {
+      description:
+        "List local dbt nodes matching a selector, without running them (dbt ls); for dbt Projects on Snowflake use bare `snowflake-axi dbt`",
+      flags: {
+        "--select": SELECT_FLAG,
+        "--exclude": EXCLUDE_FLAG,
+        "--resource-type": {
+          type: "string",
+          placeholder: "<type>",
+          description: "limit to one type: model, test, seed, snapshot, source, exposure, metric",
+        },
+        "--target": LOCAL_TARGET_FLAG,
+        "--state": STATE_FLAG,
+        "--project-dir": PROJECT_DIR_FLAG,
+        "--timeout": localTimeoutFlag(300),
+      },
+      notes: [
+        "Read-only and ungated: resolves the DAG and prints node names; no models are built.",
+        "Scope a build before running it: `--select +my_model` lists ancestors, `my_model+` lists descendants.",
+      ],
+      examples: [
+        "snowflake-axi dbt ls --select +fct_sales",
+        "snowflake-axi dbt ls --select state:modified+ --state prod-artifacts --resource-type model",
+      ],
+      run: listNodes,
+    },
     compile: {
       description: "Compile the local dbt project against Snowflake (read-only)",
       flags: {
         "--select": SELECT_FLAG,
         "--exclude": EXCLUDE_FLAG,
         "--target": LOCAL_TARGET_FLAG,
+        ...DEFER_FLAGS,
         "--project-dir": PROJECT_DIR_FLAG,
         "--timeout": localTimeoutFlag(600),
       },
       notes: [
         "Local verbs (compile, run, build, test, seed, snapshot) spawn the dbt CLI on the project in the working directory, injecting the tool's credentials into an ephemeral profile; the repo's committed profiles.yml stays credential-less and only supplies targets (role, database, schema, warehouse).",
         "Compile validates jinja and refs via dbt's introspective metadata queries; no models are materialized.",
+        "Pass `--state <dir>` to compile a subset against a reference manifest, resolving unselected refs without querying the whole DAG.",
       ],
       examples: ["snowflake-axi dbt compile", "snowflake-axi dbt compile --select +fct_sales --target dev"],
       run: (args) => runLocal(args, "compile"),
     },
+    compiled: {
+      description: "Print a model's compiled SQL from the last compile (read-only)",
+      positionals: { usage: "<model>", min: 1, max: 1 },
+      flags: {
+        "--project-dir": PROJECT_DIR_FLAG,
+      },
+      notes: [
+        "Reads target/compiled from the working directory; run `snowflake-axi dbt compile` first to refresh it.",
+        "SQL over 20000 chars is truncated with a note pointing at the file path for the full text.",
+      ],
+      examples: ["snowflake-axi dbt compiled fct_sales"],
+      run: (args) => readCompiledSql(args.positionals[0], args.str("--project-dir")),
+    },
+    state: {
+      description: "Compile the whole project and stash its manifest.json as a --defer/--state reference (read-only)",
+      flags: {
+        "--into": {
+          type: "string",
+          placeholder: "<dir>",
+          description: "directory to write the reference manifest.json into (created if absent)",
+        },
+        "--target": LOCAL_TARGET_FLAG,
+        "--project-dir": PROJECT_DIR_FLAG,
+        "--timeout": localTimeoutFlag(600),
+      },
+      notes: [
+        "The reference for a slim build: compile against a production target, then `dbt build --select <model> --defer --state <dir>` resolves unselected refs to it.",
+        "Compiles the whole project (no --select) so the manifest describes every node a later --defer run might resolve a ref() to.",
+      ],
+      examples: ["snowflake-axi dbt state --target prod --into prod-artifacts"],
+      run: captureState,
+    },
     run: localWrite("run", "Materialize models from local code, skipping their tests", {
       fullRefresh: true,
+      empty: true,
       notes: [
         "Faster than build for iteration; build additionally runs each node's tests and gates downstream nodes on them.",
       ],
@@ -470,11 +602,15 @@ export const dbtCommand = defineCommand("dbt", {
     }),
     build: localWrite("build", "Run models, tests, seeds, and snapshots from local code in DAG order", {
       fullRefresh: true,
+      empty: true,
       notes: [
         "Writes land where the chosen target points; a personal sandbox target keeps local iteration isolated.",
         "For a project deployed on Snowflake, use `snowflake-axi dbt execute` instead.",
       ],
-      examples: ["snowflake-axi dbt build --select my_model"],
+      examples: [
+        "snowflake-axi dbt build --select my_model",
+        "snowflake-axi dbt build --select fct_sales+ --defer --state prod-artifacts",
+      ],
     }),
     test: localWrite("test", "Run tests from local code", {
       notes: [

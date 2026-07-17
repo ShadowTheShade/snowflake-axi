@@ -30,9 +30,10 @@ describe("translatePgError", () => {
     expect(out.suggestions[0]).toContain("pg schema");
   });
 
-  it("maps read-only violations to READ_ONLY", () => {
+  it("maps read-only violations to READ_ONLY and points a writing SELECT at --write", () => {
     const out = translatePgError(pgError("25006", "cannot execute UPDATE in a read-only transaction"));
     expect(out.code).toBe("READ_ONLY");
+    expect(out.suggestions[0]).toContain("--write");
   });
 
   it("maps statement timeouts to TIMEOUT with a --timeout hint", () => {

@@ -38,7 +38,10 @@ snowflake-axi warehouses                    # states + 7-day credit burn + usage
 snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
 snowflake-axi dbt describe MY_PROJECT       # versions, source, target, integrations
+snowflake-axi dbt ls --select +my_model     # list local nodes matching a selector, without running them
 snowflake-axi dbt compile                   # compile the local dbt repo (cwd) against Snowflake
+snowflake-axi dbt compiled my_model         # print my_model's compiled SQL from the last compile
+snowflake-axi dbt state --target prod --into prod-artifacts   # stash prod manifest.json as a --defer reference
 snowflake-axi dbt run --select my_model     # write: materialize local models (no tests), locked until granted
 snowflake-axi dbt build --select my_model   # write: models + tests + seeds + snapshots, locked until granted
 snowflake-axi dbt seed                      # write: load local CSV seeds, locked until granted
@@ -85,6 +88,15 @@ snowflake-axi hooks                         # session-start hook status; install
   descendants, and a union must be quoted into ONE value
   (`--select "model_x+ model_y+"`), never passed as extra arguments.
   Omit `--select` to run the whole project; `run` skips tests, `build` includes them.
+- `--defer --state <dir>` is the slim build: build only the selected nodes and resolve
+  unselected upstream `ref()`s to the `manifest.json` in `<dir>` (a prior/production run)
+  instead of rebuilding the DAG. `--favor-state` prefers that manifest even when the node
+  also exists in the target (implies `--defer`); `--state` alone enables `state:` selectors
+  like `--select state:modified+`. A missing dir or manifest.json fails loud before dbt runs.
+- `dbt state --target prod --into <dir>` builds that reference in one step (compile whole
+  project + copy fresh manifest.json into `<dir>`). `dbt ls` scopes a build without running
+  it. On `run`/`build`, `--empty` materializes with `LIMIT 0` - validates SQL and schema at
+  near-zero cost. `dbt compiled <model>` prints compiled SQL without hunting target/compiled.
 - `query` runs one statement. Reads (SELECT / WITH / SHOW / DESC / DESCRIBE / EXPLAIN) are free;
   anything else is a write, refused with WRITE_NOT_ALLOWED until the user grants sql.write, then run
   (the token's role stays the hard boundary). A write reports Snowflake's count/status row.
@@ -99,6 +111,9 @@ snowflake-axi hooks                         # session-start hook status; install
   session for free; anything else is a write, refused until the user grants pg.write, then run on a
   read-write session (reporting the command tag, affected count, and any RETURNING rows). Table names
   resolve case-insensitively as `table` or `schema.table`; row counts there are planner estimates.
+- A SELECT/WITH that actually writes - calls a VOLATILE function doing INSERT/TRUNCATE, or wraps a
+  data-modifying CTE - reads by prefix and fails on the read-only session. Pass `--write` to run it on
+  the read-write session (needs pg.write); it then reports as a write. Plain reads stay read-only.
 - Cells truncate at 200 chars; add `--full` when a hint says content was cut.
 - A query that runs long prints a statement handle to stderr;
   `snowflake-axi result <handle>` collects its output later without re-running it.
