@@ -100,7 +100,13 @@ export function oauthRingKeys(ring: OAuthTokenRing): string[] {
   );
 }
 
-export function authModePath(): string {
+/** The stored logins, in display order; empty when no ring exists. */
+export function ringLogins(): string[] {
+  const ring = readOAuthRing();
+  return ring ? oauthRingKeys(ring) : [];
+}
+
+function authModePath(): string {
   return join(configDir(), "auth-mode");
 }
 
@@ -132,7 +138,7 @@ export function patConfigured(): boolean {
   return Boolean(process.env.SNOWFLAKE_TOKEN || file.SNOWFLAKE_TOKEN || snowCliConnection().SNOWFLAKE_TOKEN);
 }
 
-export function activeRolePath(): string {
+function activeRolePath(): string {
   return join(configDir(), "active-role");
 }
 

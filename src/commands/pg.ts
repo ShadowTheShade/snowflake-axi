@@ -1,9 +1,9 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { loadPgConfig } from "../config.js";
-import { humanBytes, shapeRows } from "../format.js";
+import { humanBytes, revealFlags, shapeRows, startTimer, truncationHint } from "../format.js";
 import { requireGrant } from "../grants.js";
-import { IDENTIFIER, likePattern } from "../names.js";
+import { IDENTIFIER, likePattern, matchingLabel, parseFields } from "../names.js";
 import { type PgQueryResult, type PgWriteResult, runPgQuery, runPgWrite } from "../pg.js";
 import { CELL_LIMIT } from "../present.js";
 import { assertPgReadOnly, classifyPgStatement } from "../validate.js";
@@ -34,7 +34,7 @@ function presentPgRows(result: PgQueryResult, full: boolean, limit: number): Rec
     help.push(`Rerun with --limit ${Math.min(limit * 10, 1000)} for more, or run a COUNT(*) query for the total`);
   }
   if (truncatedCells > 0) {
-    help.push(`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`);
+    help.push(truncationHint(truncatedCells, CELL_LIMIT));
   }
   const count = result.complete ? `${result.rows.length} (complete)` : `first ${result.rows.length} rows (more exist)`;
   return { count, rows: shaped, ...(help.length > 0 ? { help } : {}) };
@@ -94,8 +94,9 @@ function quoteIdent(name: string): string {
 
 function estRowsCell(value: unknown): number | string {
   const n = Number(value);
-  // reltuples is -1 until the first ANALYZE/VACUUM touches the table.
-  return n < 0 ? "" : n;
+  // reltuples is -1 until the first ANALYZE/VACUUM touches the table; "?"
+  // keeps unknown visibly distinct from a real 0.
+  return n < 0 ? "?" : n;
 }
 
 async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
@@ -125,7 +126,7 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
   );
 
   const scopeLabel = schema === undefined ? loadPgConfig().database : `${loadPgConfig().database}.${schema}`;
-  const matchLabel = like !== undefined ? ` matching '${likePattern(like)}'` : "";
+  const matchLabel = matchingLabel(like);
   const views = rows.filter((row) => row.kind === "v" || row.kind === "m");
   const listed = includeViews ? rows : rows.filter((row) => row.kind !== "v" && row.kind !== "m");
 
@@ -144,8 +145,9 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
     'Run `snowflake-axi pg query "SELECT ..."` to aggregate or filter',
   ];
   if (shown.length < listed.length) {
+    const flags = revealFlags({ like, views: includeViews });
     help.unshift(
-      `Run \`snowflake-axi pg tables${schema ? ` ${schema}` : ""} --limit ${listed.length}\` for all ${listed.length}`,
+      `Run \`snowflake-axi pg tables${schema ? ` ${schema}` : ""}${flags} --limit ${listed.length}\` for all ${listed.length}`,
     );
   }
   return {
@@ -203,18 +205,8 @@ async function runSample(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
   const full = args.bool("--full");
 
-  let select = "*";
   const fields = args.str("--fields");
-  if (fields !== undefined) {
-    const list = fields.split(",").map((f) => f.trim().toLowerCase());
-    const bad = list.filter((f) => !IDENTIFIER.test(f));
-    if (list.length === 0 || bad.length > 0) {
-      throw new AxiError(`Invalid --fields value${bad.length ? ` '${bad[0]}'` : ""}`, "VALIDATION_ERROR", [
-        "Use a comma-separated list of column names: --fields created_at,status",
-      ]);
-    }
-    select = list.join(", ");
-  }
+  const select = fields === undefined ? "*" : parseFields(fields, "lower");
 
   const row = await resolvePgTable(args.positionals[0]);
   const qualified = `${row.schema}.${row.name}`;
@@ -237,9 +229,7 @@ async function runSample(args: CommandArgs): Promise<Record<string, unknown>> {
   return {
     table: qualified,
     rows: shaped,
-    ...(truncatedCells > 0
-      ? { help: [`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`] }
-      : {}),
+    ...(truncatedCells > 0 ? { help: [truncationHint(truncatedCells, CELL_LIMIT)] } : {}),
   };
 }
 
@@ -254,7 +244,7 @@ function presentPgWrite(result: PgWriteResult, full: boolean): Record<string, un
     });
     out.returned = rows;
     if (truncatedCells > 0) {
-      out.help = [`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`];
+      out.help = [truncationHint(truncatedCells, CELL_LIMIT)];
     }
   }
   return out;
@@ -272,19 +262,17 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   }
   const { sql, kind } = classifyPgStatement(rawSql);
 
-  const started = Date.now();
+  const elapsed = startTimer();
   // A SELECT/WITH that invokes a writing function or a data-modifying CTE reads
   // by prefix but writes in fact, so --write forces the read-write session and
   // the grant; the server privileges remain the hard boundary either way.
   if (kind === "read" && !forceWrite) {
     const result = await runPgQuery(sql, { maxRows: limit, timeoutSeconds: timeout });
-    const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-    return { ...presentPgRows(result, full, limit), elapsed };
+    return { ...presentPgRows(result, full, limit), elapsed: elapsed() };
   }
   requireGrant("pg.write");
   const result = await runPgWrite(sql, { timeoutSeconds: timeout });
-  const elapsed = `${((Date.now() - started) / 1000).toFixed(1)}s`;
-  return { ...presentPgWrite(result, full), elapsed };
+  return { ...presentPgWrite(result, full), elapsed: elapsed() };
 }
 
 const WRITE_HINT = ['Run `snowflake-axi pg query "<sql>"`; a write runs once the user grants pg.write'];
@@ -327,7 +315,7 @@ export const pgCommand = defineCommand("pg", {
         "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
       },
       notes: [
-        "Row counts are planner estimates (reltuples); blank means the table was never analyzed.",
+        "Row counts are planner estimates (reltuples); ? means the table was never analyzed.",
         "System schemas (pg_catalog, information_schema) are always excluded.",
       ],
       examples: ["snowflake-axi pg", "snowflake-axi pg tables public --like orders"],

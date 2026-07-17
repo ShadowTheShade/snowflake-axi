@@ -6,13 +6,21 @@ const readActiveRole = vi.hoisted(() => vi.fn());
 const writeActiveRole = vi.hoisted(() => vi.fn());
 const runQuery = vi.hoisted(() => vi.fn());
 
-vi.mock("../src/config.js", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  loadConfig,
-  readOAuthRing,
-  readActiveRole,
-  writeActiveRole,
-}));
+vi.mock("../src/config.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/config.js")>();
+  return {
+    ...original,
+    loadConfig,
+    readOAuthRing,
+    readActiveRole,
+    writeActiveRole,
+    // Mirrors the real implementation over the mocked ring reader.
+    ringLogins: () => {
+      const ring = readOAuthRing();
+      return ring ? original.oauthRingKeys(ring) : [];
+    },
+  };
+});
 vi.mock("../src/snowflake.js", () => ({ runQuery }));
 
 import { roleCommand } from "../src/commands/role.js";

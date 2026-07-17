@@ -1,23 +1,27 @@
 import { AxiError } from "axi-sdk-js";
 import { type ActionDef, type CommandArgs, defineCommand, type FlagDef } from "../command.js";
 import { type LocalVerb, readCompiledSql, runLocalDbt, runLocalList } from "../dbt-local.js";
-import { startTimer } from "../format.js";
+import { day, shortHash, startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
-import { IDENTIFIER, parseScope, resolveRepoName, type Scope, safeLike, scopeClause, scopeLabel } from "../names.js";
+import {
+  matchingLabel,
+  objectFqn,
+  objectScope,
+  parseQualifiedName,
+  parseScope,
+  resolveRepoName,
+  type Scope,
+  safeLike,
+  scopeClause,
+  scopeLabel,
+} from "../names.js";
+import { CELL_LIMIT, presentRows } from "../present.js";
 import { runQuery } from "../snowflake.js";
 
 async function showProjects(like: string | undefined, scope: Scope, role?: string): Promise<Record<string, unknown>[]> {
   const likeClause = like === undefined ? "" : ` LIKE '${like}'`;
   const { rows } = await runQuery(`SHOW DBT PROJECTS${likeClause}${scopeClause(scope)}`, { role });
   return rows;
-}
-
-function fqnOf(row: Record<string, unknown>): string {
-  return `${row.database_name}.${row.schema_name}.${row.name}`;
-}
-
-function day(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
 }
 
 function integrationsOf(row: Record<string, unknown>): string[] {
@@ -37,7 +41,7 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
   const like = rawLike === undefined ? undefined : safeLike(rawLike, "--like");
 
   const rows = await showProjects(like, scope);
-  const matchLabel = like === undefined ? "" : ` matching '${like}'`;
+  const matchLabel = matchingLabel(like);
   if (rows.length === 0) {
     return { scope: scopeLabel(scope), count: `0 dbt projects${matchLabel} in ${scopeLabel(scope)}` };
   }
@@ -46,7 +50,7 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
     count: `${rows.length} dbt projects${matchLabel}`,
     projects: rows.map((row) => ({
       name: row.name,
-      scope: `${row.database_name}.${row.schema_name}`,
+      scope: objectScope(row),
       dbt_version: row.dbt_version,
       target: row.default_target ?? "",
       updated: day(row.updated_on),
@@ -58,7 +62,7 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
 function detail(row: Record<string, unknown>): Record<string, unknown> {
   const integrations = integrationsOf(row);
   return {
-    project: fqnOf(row),
+    project: objectFqn(row),
     owner: row.owner,
     ...(row.comment ? { comment: row.comment } : {}),
     dbt_version: row.dbt_version,
@@ -71,16 +75,6 @@ function detail(row: Record<string, unknown>): Record<string, unknown> {
     created: day(row.created_on),
     updated: day(row.updated_on),
   };
-}
-
-function parseProjectName(raw: string): string[] {
-  const parts = raw.split(".");
-  if (parts.length === 2 || parts.length > 3 || !parts.every((p) => IDENTIFIER.test(p))) {
-    throw new AxiError(`Invalid project name '${raw}'`, "VALIDATION_ERROR", [
-      "Use `name` (searched account-wide) or `db.schema.name`",
-    ]);
-  }
-  return parts.map((p) => p.toUpperCase());
 }
 
 // Bare names resolve account-wide, exact match first, then contains.
@@ -100,13 +94,13 @@ async function findProject(
 }
 
 async function describe(args: CommandArgs): Promise<Record<string, unknown>> {
-  const upper = parseProjectName(args.positionals[0]);
+  const upper = parseQualifiedName(args.positionals[0], "project name");
   const { match, label, matches } = await findProject(upper);
   if (match) return detail(match);
   if (matches.length > 1) {
     return {
       count: `${matches.length} dbt projects match '${label}'`,
-      matches: matches.map((row) => ({ project: fqnOf(row) })),
+      matches: matches.map((row) => ({ project: objectFqn(row) })),
       help: ["Run `snowflake-axi dbt describe <db.schema.name>` with the full name"],
     };
   }
@@ -127,12 +121,12 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
   }
 
   const role = args.str("--role");
-  const upper = parseProjectName(args.positionals[0]);
+  const upper = parseQualifiedName(args.positionals[0], "project name");
   const { match, label, matches } = await findProject(upper, role);
   if (!match) {
     if (matches.length > 1) {
       throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
-        ...matches.map((row) => `snowflake-axi dbt execute ${fqnOf(row)} --args "${dbtArgs}"`),
+        ...matches.map((row) => `snowflake-axi dbt execute ${objectFqn(row)} --args "${dbtArgs}"`),
       ]);
     }
     throw new AxiError(`No dbt project matches '${label}'`, "NOT_FOUND", [
@@ -140,10 +134,10 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
     ]);
   }
 
-  const fqn = fqnOf(match);
+  const fqn = objectFqn(match);
   const literal = dbtArgs.replace(/\\/g, "\\\\").replace(/'/g, "''");
   const elapsed = startTimer();
-  const { rows } = await runQuery(`EXECUTE DBT PROJECT ${fqn} args='${literal}'`, {
+  const result = await runQuery(`EXECUTE DBT PROJECT ${fqn} args='${literal}'`, {
     timeoutSeconds: args.int("--timeout"),
     role,
   });
@@ -151,7 +145,9 @@ async function execute(args: CommandArgs): Promise<Record<string, unknown>> {
     project: fqn,
     args: dbtArgs,
     elapsed: elapsed(),
-    ...(rows.length > 0 ? { rows } : { note: "Snowflake returned no output rows" }),
+    ...(result.rows.length > 0
+      ? presentRows(result, args.bool("--full"))
+      : { note: "Snowflake returned no output rows" }),
   };
 }
 
@@ -237,12 +233,12 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
   requireGrant("dbt.deploy");
   const role = args.str("--role");
   const timeoutSeconds = args.int("--timeout");
-  const upper = parseProjectName(args.positionals[0]);
+  const upper = parseQualifiedName(args.positionals[0], "project name");
   const { match, label, matches } = await findProject(upper, role);
 
   if (!match && matches.length > 1) {
     throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
-      ...matches.map((row) => `snowflake-axi dbt deploy ${fqnOf(row)}`),
+      ...matches.map((row) => `snowflake-axi dbt deploy ${objectFqn(row)}`),
     ]);
   }
   const creating = !match;
@@ -254,12 +250,12 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
   }
   if (!creating && (args.str("--target") !== undefined || args.str("--integrations") !== undefined)) {
     throw new AxiError("--target and --integrations only apply when creating a new project", "VALIDATION_ERROR", [
-      `${fqnOf(match)} already exists; deploy adds a version and leaves target and integrations unchanged`,
+      `${objectFqn(match)} already exists; deploy adds a version and leaves target and integrations unchanged`,
       "Change them in Snowflake with ALTER DBT PROJECT ... SET",
     ]);
   }
 
-  const fqn = match ? fqnOf(match) : upper.join(".");
+  const fqn = match ? objectFqn(match) : upper.join(".");
   const source = resolveSource(match?.default_version_source_location_uri, fqn, args);
   const location = gitLocation(source);
   const create = `CREATE DBT PROJECT ${fqn} FROM '${location}'${targetClause(args.str("--target"))}${integrationsClause(args.str("--integrations"))}`;
@@ -282,7 +278,7 @@ async function deploy(args: CommandArgs): Promise<Record<string, unknown>> {
 
   const { rows: versions } = await runQuery(`SHOW VERSIONS IN DBT PROJECT ${fqn}`, { role });
   const latest = versions.find((row) => String(row.is_last) === "true") ?? versions[versions.length - 1];
-  const commit = latest?.git_commit_hash ? String(latest.git_commit_hash).slice(0, 12) : undefined;
+  const commit = latest?.git_commit_hash ? shortHash(latest.git_commit_hash) : undefined;
 
   return {
     project: fqn,
@@ -445,19 +441,19 @@ function localWrite(
 async function drop(args: CommandArgs): Promise<Record<string, unknown>> {
   requireGrant("dbt.drop");
   const role = args.str("--role");
-  const upper = parseProjectName(args.positionals[0]);
+  const upper = parseQualifiedName(args.positionals[0], "project name");
   const { match, label, matches } = await findProject(upper, role);
   if (!match) {
     if (matches.length > 1) {
       throw new AxiError(`${matches.length} dbt projects match '${label}'; use the full db.schema.name`, "AMBIGUOUS", [
-        ...matches.map((row) => `snowflake-axi dbt drop ${fqnOf(row)}`),
+        ...matches.map((row) => `snowflake-axi dbt drop ${objectFqn(row)}`),
       ]);
     }
     // Idempotent: an absent project is already the desired end state.
     return { project: label, dropped: false, note: "not found (no-op)" };
   }
 
-  const fqn = fqnOf(match);
+  const fqn = objectFqn(match);
   await runQuery(`DROP DBT PROJECT IF EXISTS ${fqn}`, { role });
   return { project: fqn, dropped: true };
 }
@@ -647,6 +643,7 @@ export const dbtCommand = defineCommand("dbt", {
           placeholder: "<name>",
           description: "run as another role granted to the user, when the default role cannot execute the project",
         },
+        "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char cell truncation of the output rows` },
       },
       notes: [
         "Refused with WRITE_NOT_ALLOWED until the user grants dbt.execute (see `snowflake-axi allow --help`).",

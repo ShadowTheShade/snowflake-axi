@@ -1,7 +1,7 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { humanBytes } from "../format.js";
-import { likePattern, parseScope } from "../names.js";
+import { bytesCell, countCell, revealFlags } from "../format.js";
+import { likePattern, likeRegex, matchingLabel, parseScope } from "../names.js";
 import { runQuery } from "../snowflake.js";
 
 interface ListOptions {
@@ -27,21 +27,23 @@ async function schemasSummary(
      GROUP BY 1 ORDER BY 3 DESC NULLS LAST, 1`,
     { binds },
   );
-  const matchLabel = options.like !== undefined ? ` matching '${likePattern(options.like)}'` : "";
+  const matchLabel = matchingLabel(options.like);
   if (rows.length === 0) {
     return { database, count: `0 schemas with tables${matchLabel}` };
   }
   const shown = rows.slice(0, options.limit);
   const help = [`Run \`snowflake-axi tables ${database}.<schema>\` to list a schema's tables`];
   if (shown.length < rows.length) {
-    help.unshift(`Run \`snowflake-axi tables ${database} --limit ${rows.length}\` for all ${rows.length} schemas`);
+    help.unshift(
+      `Run \`snowflake-axi tables ${database}${revealFlags(options)} --limit ${rows.length}\` for all ${rows.length} schemas`,
+    );
   }
   return {
     database,
     schemas: shown.map((row) => ({
       name: row.NAME,
       tables: Number(row.TABLES),
-      size: humanBytes(row.BYTES === null ? null : Number(row.BYTES)),
+      size: bytesCell(row.BYTES),
     })),
     help,
   };
@@ -51,9 +53,9 @@ async function schemasSummary(
 // level is the natural answer: list what is readable and teach the drill-down.
 async function databasesSummary(like: string | undefined, limit: number): Promise<Record<string, unknown>> {
   const { rows } = await runQuery("SHOW DATABASES");
-  const pattern = like === undefined ? undefined : new RegExp(likePattern(like).replace(/%/g, ".*"), "i");
+  const pattern = like === undefined ? undefined : likeRegex(like);
   const matching = pattern ? rows.filter((row) => pattern.test(String(row.name))) : rows;
-  const matchLabel = like === undefined ? "" : ` matching '${like}'`;
+  const matchLabel = matchingLabel(like);
   if (matching.length === 0) {
     return { count: `0 databases${matchLabel} readable with this role` };
   }
@@ -63,8 +65,9 @@ async function databasesSummary(like: string | undefined, limit: number): Promis
     // SHOW DATABASES is alphabetical, so unlike the size-ordered lists the cut
     // is arbitrary; the reveal hint keeps a truncated list from reading as
     // "these are all the databases".
+    const narrowNote = like === undefined ? ", or narrow with --like" : "";
     help.unshift(
-      `Run \`snowflake-axi tables --limit ${matching.length}\` for all ${matching.length} databases, or narrow with --like`,
+      `Run \`snowflake-axi tables${revealFlags({ like })} --limit ${matching.length}\` for all ${matching.length} databases${narrowNote}`,
     );
   }
   return {
@@ -102,7 +105,7 @@ function formatTables(
   scopeLabel: string,
   options: ListOptions,
 ): Record<string, unknown> {
-  const matchLabel = options.like !== undefined ? ` matching '${likePattern(options.like)}'` : "";
+  const matchLabel = matchingLabel(options.like);
   const views = rows.filter((row) => row.KIND === "VIEW");
   const listed = options.includeViews ? rows : rows.filter((row) => row.KIND !== "VIEW");
 
@@ -118,7 +121,10 @@ function formatTables(
     'Run `snowflake-axi query "SELECT ..."` to aggregate or filter',
   ];
   if (shown.length < listed.length) {
-    help.unshift(`Run \`snowflake-axi tables ${scopeLabel} --limit ${listed.length}\` for all ${listed.length}`);
+    const flags = revealFlags({ like: options.like, views: options.includeViews });
+    help.unshift(
+      `Run \`snowflake-axi tables ${scopeLabel}${flags} --limit ${listed.length}\` for all ${listed.length}`,
+    );
   }
   return {
     scope: scopeLabel,
@@ -126,8 +132,8 @@ function formatTables(
     tables: shown.map((row) => ({
       name: row.NAME,
       ...(options.includeViews ? { kind: row.KIND === "BASE TABLE" ? "TABLE" : row.KIND } : {}),
-      rows: row.ROW_COUNT === null || row.ROW_COUNT === undefined ? "" : Number(row.ROW_COUNT),
-      size: humanBytes(row.BYTES === null || row.BYTES === undefined ? null : Number(row.BYTES)),
+      rows: countCell(row.ROW_COUNT),
+      size: bytesCell(row.BYTES),
     })),
     help,
   };

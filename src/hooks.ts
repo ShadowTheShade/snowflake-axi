@@ -17,12 +17,12 @@ import {
  * covers Claude Code, Codex, and OpenCode; this module drives it and adds the
  * status and remove sides the SDK does not provide.
  */
-export const HOOK_MARKER = "snowflake-axi";
-export const CONTEXT_BINARY = "snowflake-axi-context";
+const HOOK_MARKER = "snowflake-axi";
+const CONTEXT_BINARY = "snowflake-axi-context";
 const HOOK_TIMEOUT_SECONDS = 10;
 const OPENCODE_MANAGED_MARKER = `axi-sdk-js managed opencode plugin: ${HOOK_MARKER}`;
 
-export interface HookTarget {
+interface HookTarget {
   app: string;
   file: string;
 }
@@ -88,7 +88,7 @@ function readJson(file: string): HookSettings {
   return JSON.parse(text) as HookSettings;
 }
 
-export function managedHookCommand(settings: HookSettings): string | undefined {
+function managedHookCommand(settings: HookSettings): string | undefined {
   const groups = settings.hooks?.SessionStart;
   if (!Array.isArray(groups)) return undefined;
   for (const group of groups) {

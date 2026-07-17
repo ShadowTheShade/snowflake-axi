@@ -4,19 +4,14 @@ import {
   DEFAULT_ROLE_KEY,
   IDENTIFIER,
   loadConfig,
-  oauthRingKeys,
   oauthRoleKey,
   processEnvRole,
   readActiveRole,
   readOAuthRing,
+  ringLogins,
   writeActiveRole,
 } from "../config.js";
 import { runQuery } from "../snowflake.js";
-
-function ringLogins(): string[] {
-  const ring = readOAuthRing();
-  return ring ? oauthRingKeys(ring) : [];
-}
 
 /** The active role for display: an explicit name, or "default" for the unscoped login. */
 function activeLabel(): string {

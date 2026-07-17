@@ -103,7 +103,7 @@ describe("doc coverage (drift guard)", () => {
 
   it("every flag the docs mention exists in a command's help", () => {
     const helpText = Object.values(CORE_COMMANDS)
-      .map((spec) => spec.help)
+      .flatMap((spec) => [spec.help, ...Object.values(spec.subcommandHelp ?? {})])
       .join("\n");
     const documented = new Set([
       ...(SKILL.match(/--[a-z]+/g) ?? []),

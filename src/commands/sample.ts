@@ -1,29 +1,17 @@
-import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import { shapeRows } from "../format.js";
-import { IDENTIFIER, resolveTableName } from "../names.js";
+import { shapeRows, truncationHint } from "../format.js";
+import { parseFields, resolveTableName } from "../names.js";
+import { CELL_LIMIT } from "../present.js";
 import { runQuery } from "../snowflake.js";
 import { assertReadOnly } from "../validate.js";
-
-const CELL_LIMIT = 200;
 
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const name = resolveTableName(args.positionals[0]);
   const limit = args.int("--limit");
   const full = args.bool("--full");
 
-  let select = "*";
   const fields = args.str("--fields");
-  if (fields !== undefined) {
-    const list = fields.split(",").map((f) => f.trim().toUpperCase());
-    const bad = list.filter((f) => !IDENTIFIER.test(f));
-    if (list.length === 0 || bad.length > 0) {
-      throw new AxiError(`Invalid --fields value${bad.length ? ` '${bad[0]}'` : ""}`, "VALIDATION_ERROR", [
-        "Use a comma-separated list of column names: --fields ORDER_DATE,ORDER_TOTAL",
-      ]);
-    }
-    select = list.join(", ");
-  }
+  const select = fields === undefined ? "*" : parseFields(fields, "upper");
 
   const where = args.str("--where");
   const whereClause = where === undefined ? "" : ` WHERE ${where}`;
@@ -44,9 +32,7 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   return {
     table: name.fqn,
     rows: shaped,
-    ...(truncatedCells > 0
-      ? { help: [`${truncatedCells} cell(s) truncated at ${CELL_LIMIT} chars; rerun with --full`] }
-      : {}),
+    ...(truncatedCells > 0 ? { help: [truncationHint(truncatedCells, CELL_LIMIT)] } : {}),
   };
 }
 

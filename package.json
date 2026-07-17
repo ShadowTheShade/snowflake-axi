@@ -41,6 +41,7 @@
     "prepublishOnly": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
+    "@toon-format/toon": "^2.3.1",
     "axi-sdk-js": "^0.1.8",
     "pg": "^8.22.0",
     "pg-cursor": "^2.21.0",

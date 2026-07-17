@@ -97,14 +97,56 @@ describe("defineCommand: subcommands", () => {
     });
   });
 
+  it("rejects near-miss verbs instead of misreading them as positionals", async () => {
+    await expect(grouped.run(["raed", "x"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+      message: "'raed' is not a group subcommand",
+      suggestions: [
+        "Did you mean `snowflake-axi group read`?",
+        "For 'raed' as the <path> argument, run `snowflake-axi group list raed`",
+        "Valid subcommands: list, read",
+      ],
+    });
+    // Case-only mismatches count as near misses too.
+    await expect(grouped.run(["READ", "x"])).rejects.toMatchObject({
+      message: "'READ' is not a group subcommand",
+    });
+  });
+
+  it("still falls back when the argument resembles no verb", async () => {
+    expect(await grouped.run(["inventory"])).toEqual({ verb: "list", path: "inventory" });
+  });
+
   it("validates flags per subcommand", async () => {
     await expect(grouped.run(["x", "--full"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
   });
 
-  it("generates grouped help with per-verb usage", () => {
-    expect(grouped.help).toContain("snowflake-axi group <path>");
-    expect(grouped.help).toContain("snowflake-axi group read <path> [flags]");
-    expect(grouped.help).toContain("flags (group read):");
+  it("generates a compact group index, not the concatenated manuals", () => {
+    expect(grouped.help).toContain("command: group");
+    expect(grouped.help).toContain("usage: snowflake-axi group [subcommand] [args] [flags]");
+    expect(grouped.help).toContain("list <path>: List things (default)");
+    expect(grouped.help).toContain("read <path> [flags]: Read a thing");
+    expect(grouped.help).toContain("Run `snowflake-axi group <subcommand> --help`");
+    expect(grouped.help).not.toContain("--full: no truncation");
+  });
+
+  it("serves help scoped to the requested subcommand", async () => {
+    expect(await grouped.run(["read", "--help"])).toBe(grouped.subcommandHelp?.read);
+    const readHelp = grouped.subcommandHelp?.read ?? "";
+    expect(readHelp).toContain("command: group read");
+    expect(readHelp).toContain("usage: snowflake-axi group read <path> [flags]");
+    expect(readHelp).toContain("--full: no truncation");
+    expect(readHelp).not.toContain("List things");
+  });
+
+  it("answers bare or unresolvable --help with the group index", async () => {
+    expect(await grouped.run(["--help"])).toBe(grouped.help);
+    expect(await grouped.run(["x", "--help"])).toBe(grouped.help);
+  });
+
+  it("answers --help on a single-action command with its full help", async () => {
+    expect(await single.run(["--help"])).toBe(single.help);
+    expect(single.handlesHelp).toBe(true);
   });
 
   it("rejects invalid definitions at define time", () => {

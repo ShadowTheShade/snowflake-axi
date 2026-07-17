@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
+import { encode } from "@toon-format/toon";
 import { runAxiCli } from "axi-sdk-js";
-import type { CommandSpec } from "./command.js";
+import { type CommandSpec, nearestVerb } from "./command.js";
 import { allowCommand } from "./commands/allow.js";
 import { authCommand } from "./commands/auth.js";
 import { contextCommand } from "./commands/context.js";
@@ -50,6 +51,24 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   hooks: hooksCommand,
 };
 
+/**
+ * The SDK default suggests a bare `Run \`--help\``, which is not a runnable
+ * command; make the error self-correcting in one turn instead - a did-you-mean
+ * for near misses plus the valid command names inline.
+ */
+function renderUnknownCommand(command: string, specs: Record<string, CommandSpec>): string {
+  const near = nearestVerb(command, Object.keys(specs));
+  return `${encode({
+    error: `Unknown command: ${command}`,
+    code: "VALIDATION_ERROR",
+    help: [
+      ...(near === undefined ? [] : [`Did you mean \`snowflake-axi ${near}\`?`]),
+      `Commands: ${Object.keys(specs).join(", ")}`,
+      "Run `snowflake-axi --help` for a summary of each",
+    ],
+  })}\n`;
+}
+
 function topLevelHelp(specs: Record<string, CommandSpec>): string {
   const width = Math.max(...Object.keys(specs).map((name) => name.length));
   const lines = Object.entries(specs)
@@ -81,8 +100,14 @@ export async function main(argv?: string[]): Promise<void> {
     version: pkg.version,
     argv,
     topLevelHelp: topLevelHelp(specs),
-    getCommandHelp: (command) => specs[command]?.help,
+    // Compiled specs answer --help inside run() (scoped to the requested
+    // subcommand); the SDK intercept only serves hand-written plugin specs.
+    getCommandHelp: (command) => {
+      const spec = specs[command];
+      return spec !== undefined && spec.handlesHelp !== true ? spec.help : undefined;
+    },
     home: () => homeView(plugins.homeHelp),
+    renderUnknownCommand: (command) => renderUnknownCommand(command, specs),
     commands,
   });
 }

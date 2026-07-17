@@ -1,5 +1,5 @@
 import { type CommandArgs, defineCommand } from "../command.js";
-import { cellValue } from "../format.js";
+import { cellValue, truncationHint } from "../format.js";
 import { runQuery } from "../snowflake.js";
 
 const COMMENT_LIMIT = 100;
@@ -50,9 +50,7 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
     count: `${show.rows.length} warehouses`,
     ...("note" in metering ? { note: metering.note } : {}),
     warehouses,
-    ...(truncatedComments > 0
-      ? { help: [`${truncatedComments} comment(s) truncated at ${COMMENT_LIMIT} chars; rerun with --full`] }
-      : {}),
+    ...(truncatedComments > 0 ? { help: [truncationHint(truncatedComments, COMMENT_LIMIT, "comment")] } : {}),
   };
 }
 

@@ -58,7 +58,7 @@ describe("semantics list", () => {
     const output = (await semanticsCommand.run(["--like", "toppings"])) as Record<string, unknown>;
     expect(output.views).toEqual([{ name: "SCOOPS_DB.PUBLIC.TOPPINGS_SV" }]);
     const none = (await semanticsCommand.run(["--like", "nope"])) as Record<string, unknown>;
-    expect(none.count).toBe("0 semantic views matching 'nope' visible to this role");
+    expect(none.count).toBe("0 semantic views matching '%nope%' visible to this role");
   });
 });
 

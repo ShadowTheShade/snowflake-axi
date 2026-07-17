@@ -333,13 +333,24 @@ function errorLines(tail: string[]): string[] {
   return picked.length > 0 ? picked : ["dbt produced no output; run dbt manually in the project to inspect"];
 }
 
+/** Help lines for a failed dbt run: the error tail, plus the OAuth pinned-role hint when it smells role-related. */
+function dbtFailureHelp(auth: string, tail: string[]): string[] {
+  const roleHint =
+    auth === "oauth" && tail.some((line) => /role/i.test(line))
+      ? [
+          "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
+        ]
+      : [];
+  return [...errorLines(tail), ...roleHint];
+}
+
 /**
  * Validates a --state directory and resolves it to an absolute path. --state
  * names a directory holding a manifest.json from a prior run; both `--defer`
  * and `state:` selectors read it. Checked before dbt spawns so a bad reference
  * fails loud here rather than as an opaque dbt stack trace.
  */
-export function resolveStateDir(state: string | undefined): string | undefined {
+function resolveStateDir(state: string | undefined): string | undefined {
   if (state === undefined) return undefined;
   const dir = resolve(state);
   if (!existsSync(dir) || !statSync(dir).isDirectory()) {
@@ -488,16 +499,11 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
     );
   }
   if (exit.code !== 0) {
-    const roleHint =
-      auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
-        ? [
-            "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
-          ]
-        : [];
-    throw new AxiError(`${command} on ${project.name} failed before producing results`, "DBT_ERROR", [
-      ...errorLines(exit.tail),
-      ...roleHint,
-    ]);
+    throw new AxiError(
+      `${command} on ${project.name} failed before producing results`,
+      "DBT_ERROR",
+      dbtFailureHelp(auth, exit.tail),
+    );
   }
 
   const base = { project: project.name, target: targetName, command };
@@ -566,13 +572,7 @@ export async function runLocalList(options: LocalListOptions): Promise<Record<st
   }
 
   if (exit.code !== 0) {
-    const roleHint =
-      auth === "oauth" && exit.tail.some((line) => /role/i.test(line))
-        ? [
-            "OAuth sessions run as the token's pinned role; if this target's role: differs, run `snowflake-axi login --role <that role>` first",
-          ]
-        : [];
-    throw new AxiError(`dbt ls on ${project.name} failed`, "DBT_ERROR", [...errorLines(exit.tail), ...roleHint]);
+    throw new AxiError(`dbt ls on ${project.name} failed`, "DBT_ERROR", dbtFailureHelp(auth, exit.tail));
   }
 
   const nodes = exit.stdout

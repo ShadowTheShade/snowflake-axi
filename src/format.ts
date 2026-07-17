@@ -27,7 +27,7 @@ const NUMERIC = /^-?\d+(\.\d+)?$/;
  * to columns whose Snowflake type is numeric, never to text columns, where
  * values like '007' must keep their digits.
  */
-export function coerceNumeric(value: unknown): unknown {
+function coerceNumeric(value: unknown): unknown {
   if (typeof value !== "string" || !NUMERIC.test(value)) return value;
   const integerDigits = value.replace(/^-/, "").split(".")[0].length;
   if (integerDigits > 15) return value;
@@ -46,7 +46,7 @@ export function cellValue(
   }
   const text = typeof coerced === "string" ? coerced : JSON.stringify(coerced);
   if (maxChars !== null && text.length > maxChars) {
-    return { value: `${text.slice(0, maxChars)}...`, truncated: true };
+    return { value: `${text.slice(0, maxChars)}... (${text.length} chars total)`, truncated: true };
   }
   return { value: text, truncated: false };
 }
@@ -66,6 +66,44 @@ export function shapeRows(
     return out;
   });
   return { rows: shaped, truncatedCells };
+}
+
+/** Date-only slice of a timestamp-ish value, e.g. "2026-05-31". */
+export function day(value: unknown): string {
+  return String(value ?? "").slice(0, 10);
+}
+
+/** First 12 characters of a commit hash. */
+export function shortHash(value: unknown): string {
+  return String(value ?? "").slice(0, 12);
+}
+
+/** Row-count cell: numeric when known, empty when the catalog has no value. */
+export function countCell(value: unknown): number | string {
+  return value === null || value === undefined ? "" : Number(value);
+}
+
+/** Size cell: human-readable bytes, empty when the catalog has no value. */
+export function bytesCell(value: unknown): string {
+  return humanBytes(value === null || value === undefined ? null : Number(value));
+}
+
+/** The standard truncated-cells help line, pointing at the --full escape hatch. */
+export function truncationHint(count: number, limit: number, noun = "cell"): string {
+  return `${count} ${noun}(s) truncated at ${limit} chars; rerun with --full`;
+}
+
+/**
+ * Flag tail for reveal hints, carrying the filters that scoped the current
+ * listing so the suggested rerun returns the same slice, not an unfiltered one.
+ */
+export function revealFlags(options: { like?: string; views?: boolean }): string {
+  const parts: string[] = [];
+  if (options.like !== undefined) {
+    parts.push(/^[A-Za-z0-9_%]+$/.test(options.like) ? `--like ${options.like}` : `--like '${options.like}'`);
+  }
+  if (options.views) parts.push("--views");
+  return parts.length === 0 ? "" : ` ${parts.join(" ")}`;
 }
 
 /** Elapsed-seconds label on the monotonic clock, immune to wall-clock steps (WSL NTP corrections). */

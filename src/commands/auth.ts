@@ -1,19 +1,6 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
-import {
-  type AuthMode,
-  loadConfig,
-  oauthRingKeys,
-  patConfigured,
-  readAuthMode,
-  readOAuthRing,
-  writeAuthMode,
-} from "../config.js";
-
-function ringLogins(): string[] {
-  const ring = readOAuthRing();
-  return ring ? oauthRingKeys(ring) : [];
-}
+import { type AuthMode, loadConfig, patConfigured, readAuthMode, ringLogins, writeAuthMode } from "../config.js";
 
 /** What a fresh invocation would resolve with no persisted mode and no env override. */
 function defaultMode(): string {

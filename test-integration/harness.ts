@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-export const BIN = fileURLToPath(new URL("../dist/bin/snowflake-axi.js", import.meta.url));
+const BIN = fileURLToPath(new URL("../dist/bin/snowflake-axi.js", import.meta.url));
 const exec = promisify(execFile);
 
 export interface CliResult {

@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { cellValue, coerceNumeric, humanBytes, money, pct, shapeRows, startTimer } from "../src/format.js";
+import {
+  bytesCell,
+  cellValue,
+  countCell,
+  day,
+  humanBytes,
+  money,
+  pct,
+  revealFlags,
+  shapeRows,
+  shortHash,
+  startTimer,
+  truncationHint,
+} from "../src/format.js";
 
 describe("startTimer", () => {
   it("renders a non-negative elapsed-seconds label", () => {
@@ -18,20 +31,40 @@ describe("humanBytes", () => {
   });
 });
 
-describe("coerceNumeric", () => {
-  it("turns clean numeric strings into numbers", () => {
-    expect(coerceNumeric("12456789.00")).toBe(12456789);
-    expect(coerceNumeric("-3.5")).toBe(-3.5);
-    expect(coerceNumeric("2026-05-31")).toBe("2026-05-31");
-    expect(coerceNumeric("1234567890123456789")).toBe("1234567890123456789");
+describe("numeric coercion (via cellValue)", () => {
+  it("turns clean numeric strings into numbers on numeric columns only", () => {
+    expect(cellValue("12456789.00", 200, true).value).toBe(12456789);
+    expect(cellValue("-3.5", 200, true).value).toBe(-3.5);
+    expect(cellValue("2026-05-31", 200, true).value).toBe("2026-05-31");
+    expect(cellValue("1234567890123456789", 200, true).value).toBe("1234567890123456789");
+  });
+});
+
+describe("small formatters", () => {
+  it("slices days and commit hashes, coalescing null", () => {
+    expect(day("2026-05-31T10:00:00Z")).toBe("2026-05-31");
+    expect(day(null)).toBe("");
+    expect(shortHash("0123456789abcdef0123")).toBe("0123456789ab");
+  });
+
+  it("renders count/bytes cells with empty for unknown", () => {
+    expect(countCell("48210332")).toBe(48210332);
+    expect(countCell(null)).toBe("");
+    expect(bytesCell("19549651968")).toBe("18.2GB");
+    expect(bytesCell(undefined)).toBe("");
+  });
+
+  it("builds the standard truncation hint", () => {
+    expect(truncationHint(3, 200)).toBe("3 cell(s) truncated at 200 chars; rerun with --full");
+    expect(truncationHint(1, 100, "comment")).toBe("1 comment(s) truncated at 100 chars; rerun with --full");
   });
 });
 
 describe("cellValue / shapeRows", () => {
-  it("truncates long text with a marker and counts truncations", () => {
+  it("truncates long text with the total size and counts truncations", () => {
     const long = "x".repeat(300);
     const { rows, truncatedCells } = shapeRows([{ a: long, b: "short", c: null }], { maxCellChars: 200 });
-    expect(rows[0].a).toBe(`${"x".repeat(200)}...`);
+    expect(rows[0].a).toBe(`${"x".repeat(200)}... (300 chars total)`);
     expect(rows[0].b).toBe("short");
     expect(rows[0].c).toBe("");
     expect(truncatedCells).toBe(1);
@@ -59,6 +92,20 @@ describe("cellValue / shapeRows", () => {
 
   it("stringifies objects (VARIANT columns)", () => {
     expect(cellValue({ a: 1 }, 200).value).toBe('{"a":1}');
+  });
+});
+
+describe("revealFlags", () => {
+  it("carries the filters that scoped the listing", () => {
+    expect(revealFlags({})).toBe("");
+    expect(revealFlags({ like: "fact" })).toBe(" --like fact");
+    expect(revealFlags({ like: "FCT%" })).toBe(" --like FCT%");
+    expect(revealFlags({ views: true })).toBe(" --views");
+    expect(revealFlags({ like: "fact", views: true })).toBe(" --like fact --views");
+  });
+
+  it("quotes patterns the shell would mangle", () => {
+    expect(revealFlags({ like: "FOO$BAR" })).toBe(" --like 'FOO$BAR'");
   });
 });
 

@@ -1,12 +1,12 @@
 import { AxiError } from "axi-sdk-js";
 import { type CommandArgs, defineCommand } from "../command.js";
 import { loadConfig } from "../config.js";
-import { humanBytes, shapeRows } from "../format.js";
+import { humanBytes, shapeRows, truncationHint } from "../format.js";
+import { CELL_LIMIT } from "../present.js";
 import { runQuery } from "../snowflake.js";
 
 const STAGE_PATH = /^@[A-Za-z0-9_$.~/-]+$/;
 const FILE_FORMAT = /^[A-Za-z_][A-Za-z0-9_$.]*$/;
-const CELL_LIMIT = 200;
 
 function assertStagePath(raw: string, usage: string): string {
   if (!STAGE_PATH.test(raw)) {
@@ -77,9 +77,7 @@ async function read(args: CommandArgs): Promise<Record<string, unknown>> {
     file: path,
     format,
     records: shaped.map((row) => row.RECORD),
-    ...(truncatedCells > 0
-      ? { help: [`${truncatedCells} record(s) truncated at ${CELL_LIMIT} chars; rerun with --full`] }
-      : {}),
+    ...(truncatedCells > 0 ? { help: [truncationHint(truncatedCells, CELL_LIMIT, "record")] } : {}),
   };
 }
 

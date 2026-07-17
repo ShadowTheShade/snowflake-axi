@@ -11,6 +11,14 @@ export type CommandOutput = string | Record<string, unknown>;
 export interface CommandSpec {
   summary: string;
   help: string;
+  /** Scoped help per subcommand verb; present on grouped commands. */
+  subcommandHelp?: Record<string, string>;
+  /**
+   * True when run() itself answers `--help`. The SDK's help intercept only
+   * knows the top-level command name, so grouped commands opt out of it to
+   * serve help scoped to the requested subcommand instead of the whole group.
+   */
+  handlesHelp?: boolean;
   run: (args: string[]) => Promise<CommandOutput> | CommandOutput;
 }
 
@@ -122,6 +130,46 @@ interface ResolvedAction {
   rest: string[];
 }
 
+/** Edit distance where an adjacent transposition counts as one edit, the most common typo. */
+function editDistance(a: string, b: string): number {
+  const rows: number[][] = [Array.from({ length: b.length + 1 }, (_, j) => j)];
+  for (let i = 1; i <= a.length; i++) {
+    const current = [i];
+    for (let j = 1; j <= b.length; j++) {
+      current[j] = Math.min(
+        rows[i - 1][j] + 1,
+        current[j - 1] + 1,
+        rows[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        current[j] = Math.min(current[j], rows[i - 2][j - 2] + 1);
+      }
+    }
+    rows.push(current);
+  }
+  return rows[a.length][b.length];
+}
+
+/**
+ * A first argument within an edit or two of a real verb is far more likely a
+ * typo'd subcommand than a positional; without this check it would fall
+ * through to the default subcommand and return a plausible-looking result for
+ * the wrong thing (e.g. `pg tabels` listing an empty "tabels" schema).
+ */
+export function nearestVerb(verb: string, names: string[]): string | undefined {
+  const lower = verb.toLowerCase();
+  let best: string | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const name of names) {
+    const distance = editDistance(lower, name);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = name;
+    }
+  }
+  return bestDistance <= (lower.length >= 5 ? 2 : 1) ? best : undefined;
+}
+
 function resolveAction(name: string, def: CommandDef, argv: string[]): ResolvedAction {
   if (def.action) return { displayName: name, action: def.action, rest: argv };
   const subs = def.subcommands ?? {};
@@ -141,46 +189,65 @@ function resolveAction(name: string, def: CommandDef, argv: string[]): ResolvedA
       `Valid subcommands: ${Object.keys(subs).join(", ")}`,
     ]);
   }
+  if (verb !== undefined && !verb.startsWith("-")) {
+    const near = nearestVerb(verb, Object.keys(subs));
+    if (near !== undefined) {
+      throw new AxiError(`'${verb}' is not a ${name} subcommand`, "VALIDATION_ERROR", [
+        `Did you mean \`snowflake-axi ${name} ${near}\`?`,
+        ...(fallback.positionals
+          ? [
+              `For '${verb}' as the ${fallback.positionals.usage} argument, run \`snowflake-axi ${name} ${def.defaultSubcommand} ${verb}\``,
+            ]
+          : []),
+        `Valid subcommands: ${Object.keys(subs).join(", ")}`,
+      ]);
+    }
+  }
   return { displayName: name, action: fallback, rest: argv };
 }
 
-function orderedActions(name: string, def: CommandDef): Array<{ displayName: string; action: ActionDef }> {
-  if (def.action) return [{ displayName: name, action: def.action }];
-  const subs = def.subcommands ?? {};
-  const verbs = Object.keys(subs).sort((a, b) =>
-    a === def.defaultSubcommand ? -1 : b === def.defaultSubcommand ? 1 : 0,
-  );
-  return verbs.map((verb) => ({
-    displayName: verb === def.defaultSubcommand ? name : `${name} ${verb}`,
-    action: subs[verb],
-  }));
-}
-
-function renderHelp(name: string, def: CommandDef): string {
-  const actions = orderedActions(name, def);
-  const lines = [`command: ${name}`, `description: ${def.description ?? def.action?.description ?? def.summary}`];
-  if (actions.length === 1) {
-    lines.push(`usage: ${usageLine(actions[0].displayName, actions[0].action)}`);
-  } else {
-    lines.push("usage:");
-    for (const { displayName, action } of actions) lines.push(`  ${usageLine(displayName, action)}`);
-  }
-  for (const { displayName, action } of actions) {
-    const flags = Object.entries(action.flags ?? {});
-    if (flags.length === 0) continue;
-    lines.push(actions.length === 1 ? "flags:" : `flags (${displayName}):`);
+function renderActionHelp(displayName: string, action: ActionDef, description?: string): string {
+  const lines = [
+    `command: ${displayName}`,
+    `description: ${description ?? action.description}`,
+    `usage: ${usageLine(displayName, action)}`,
+  ];
+  const flags = Object.entries(action.flags ?? {});
+  if (flags.length > 0) {
+    lines.push("flags:");
     for (const [flagName, flagDef] of flags) lines.push(`  ${flagLine(flagName, flagDef)}`);
   }
-  const notes = actions.flatMap(({ action }) => action.notes ?? []);
-  if (notes.length > 0) {
+  if (action.notes && action.notes.length > 0) {
     lines.push("notes:");
-    for (const note of notes) lines.push(`  ${note}`);
+    for (const note of action.notes) lines.push(`  ${note}`);
   }
-  const examples = actions.flatMap(({ action }) => action.examples ?? []);
-  if (examples.length > 0) {
+  if (action.examples && action.examples.length > 0) {
     lines.push("examples:");
-    for (const example of examples) lines.push(`  ${example}`);
+    for (const example of action.examples) lines.push(`  ${example}`);
   }
+  return `${lines.join("\n")}\n`;
+}
+
+/**
+ * The group's own help is an index - one usage-plus-description line per
+ * subcommand - not the concatenation of every subcommand's manual; each verb's
+ * flags, notes, and examples live in its scoped `<group> <verb> --help`.
+ */
+function renderGroupIndex(name: string, def: CommandDef): string {
+  const lines = [
+    `command: ${name}`,
+    `description: ${def.description ?? def.summary}`,
+    `usage: snowflake-axi ${name} [subcommand] [args] [flags]`,
+    "subcommands:",
+  ];
+  for (const [verb, action] of Object.entries(def.subcommands ?? {})) {
+    const usage = [verb, action.positionals?.usage, Object.keys(action.flags ?? {}).length > 0 ? "[flags]" : undefined]
+      .filter(Boolean)
+      .join(" ");
+    const marker = verb === def.defaultSubcommand ? " (default)" : "";
+    lines.push(`  ${usage}: ${action.description}${marker}`);
+  }
+  lines.push(`help: Run \`snowflake-axi ${name} <subcommand> --help\` for its flags, notes, and examples`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -194,10 +261,31 @@ export function defineCommand(name: string, def: CommandDef): CommandSpec {
   if (def.defaultSubcommand !== undefined && !Object.hasOwn(def.subcommands ?? {}, def.defaultSubcommand)) {
     throw new Error(`command ${name}: defaultSubcommand '${def.defaultSubcommand}' is not a subcommand`);
   }
+  const help = def.action
+    ? renderActionHelp(name, def.action, def.description ?? def.action.description)
+    : renderGroupIndex(name, def);
+  const subcommandHelp = def.action
+    ? undefined
+    : Object.fromEntries(
+        Object.entries(def.subcommands ?? {}).map(([verb, action]) => [
+          verb,
+          renderActionHelp(`${name} ${verb}`, action),
+        ]),
+      );
   return {
     summary: def.summary,
-    help: renderHelp(name, def),
+    help,
+    subcommandHelp,
+    handlesHelp: true,
     run: async (argv) => {
+      // `--help` always passes, before any validation: an explicit subcommand
+      // gets its scoped manual, anything else the group index (or, for a
+      // single-action command, its full help).
+      if (argv.includes("--help")) {
+        const verb = argv[0];
+        if (subcommandHelp && verb !== undefined && Object.hasOwn(subcommandHelp, verb)) return subcommandHelp[verb];
+        return help;
+      }
       const { displayName, action, rest } = resolveAction(name, def, argv);
       return action.run(parseActionArgs(displayName, action, rest));
     },

@@ -34,10 +34,17 @@ describe("offline behaviors (no credentials required)", () => {
     expect(stdout).toContain("query");
   });
 
-  it("unknown command exits 2 with a structured error", async () => {
+  it("unknown command exits 2 with the valid commands inline", async () => {
     const { stdout, code } = await cli(["navigate"]);
     expect(code).toBe(2);
     expect(stdout).toContain("Unknown command");
+    expect(stdout).toContain("Commands: tables,");
+  });
+
+  it("a near-miss command gets a did-you-mean", async () => {
+    const { stdout, code } = await cli(["tabls"]);
+    expect(code).toBe(2);
+    expect(stdout).toContain("Did you mean `snowflake-axi tables`?");
   });
 
   it("unknown flag exits 2 listing valid flags, before any connection", async () => {

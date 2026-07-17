@@ -85,7 +85,9 @@ describe("warehouses command", () => {
       total: 1,
     });
     const truncated = (await warehousesCommand.run([])) as Record<string, unknown>;
-    expect((truncated.warehouses as Record<string, unknown>[])[0].comment).toBe(`${"x".repeat(100)}...`);
+    expect((truncated.warehouses as Record<string, unknown>[])[0].comment).toBe(
+      `${"x".repeat(100)}... (150 chars total)`,
+    );
     expect((truncated.help as string[])[0]).toContain("--full");
     const full = (await warehousesCommand.run(["--full"])) as Record<string, unknown>;
     expect((full.warehouses as Record<string, unknown>[])[0].comment).toBe(long);

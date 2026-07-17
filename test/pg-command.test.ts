@@ -41,7 +41,7 @@ describe("pg tables", () => {
     expect(output.count).toContain("2 tables in controlplane");
     expect(output.tables).toEqual([
       { schema: "public", name: "orders", rows: 985, size: "16KB" },
-      { schema: "app", name: "users", rows: "", size: "8KB" },
+      { schema: "app", name: "users", rows: "?", size: "8KB" },
     ]);
   });
 

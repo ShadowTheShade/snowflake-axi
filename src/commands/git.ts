@@ -1,16 +1,16 @@
 import { type CommandArgs, defineCommand } from "../command.js";
-import { humanBytes, startTimer } from "../format.js";
+import { day, humanBytes, shortHash, startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
-import { parseScope, resolveRepoName, safeLike, scopeClause, scopeLabel } from "../names.js";
+import {
+  matchingLabel,
+  objectScope,
+  parseScope,
+  resolveRepoName,
+  safeLike,
+  scopeClause,
+  scopeLabel,
+} from "../names.js";
 import { runQuery } from "../snowflake.js";
-
-function day(value: unknown): string {
-  return String(value ?? "").slice(0, 10);
-}
-
-function shortHash(value: unknown): string {
-  return String(value ?? "").slice(0, 12);
-}
 
 async function list(args: CommandArgs): Promise<Record<string, unknown>> {
   const scope = parseScope(args.positionals[0]);
@@ -19,7 +19,7 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
   const likeClause = like === undefined ? "" : ` LIKE '${like}'`;
 
   const { rows } = await runQuery(`SHOW GIT REPOSITORIES${likeClause}${scopeClause(scope)}`);
-  const matchLabel = like === undefined ? "" : ` matching '${like}'`;
+  const matchLabel = matchingLabel(like);
   if (rows.length === 0) {
     return { scope: scopeLabel(scope), count: `0 git repositories${matchLabel} in ${scopeLabel(scope)}` };
   }
@@ -28,7 +28,7 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
     count: `${rows.length} git repositories${matchLabel}`,
     repositories: rows.map((row) => ({
       name: row.name,
-      scope: `${row.database_name}.${row.schema_name}`,
+      scope: objectScope(row),
       origin: row.origin,
       last_fetched: day(row.last_fetched_at),
     })),
@@ -47,7 +47,7 @@ async function branches(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
 
   const { rows } = await runQuery(`SHOW GIT BRANCHES${likeClause} IN ${repo.fqn}`);
-  const matchLabel = like === undefined ? "" : ` matching '${like}'`;
+  const matchLabel = matchingLabel(like);
   if (rows.length === 0) {
     return { repository: repo.fqn, count: `0 branches${matchLabel} in ${repo.fqn}` };
   }

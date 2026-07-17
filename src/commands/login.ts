@@ -1,5 +1,5 @@
 import { defineCommand } from "../command.js";
-import { oauthRingKeys, oauthTokenPath, patConfigured, readAuthMode, readOAuthRing } from "../config.js";
+import { oauthTokenPath, patConfigured, readAuthMode, ringLogins } from "../config.js";
 import { login } from "../oauth.js";
 
 export const loginCommand = defineCommand("login", {
@@ -17,14 +17,13 @@ export const loginCommand = defineCommand("login", {
     },
     run: async (args) => {
       const tokens = await login({ role: args.str("--role") });
-      const ring = readOAuthRing();
       return {
         status: "logged in",
         account: tokens.account,
         user: tokens.user,
         ...(tokens.roleScope !== undefined ? { role: `${tokens.roleScope} (pinned by scope)` } : {}),
         refreshTokenExpires: new Date(tokens.refreshTokenExpiresAt).toISOString(),
-        logins: ring ? oauthRingKeys(ring) : [],
+        logins: ringLogins(),
         tokenFile: oauthTokenPath(),
         ...(patConfigured() && readAuthMode() !== "oauth"
           ? {

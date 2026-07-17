@@ -72,6 +72,20 @@ describe("tables command", () => {
     expect((output.help as string[])[0]).toContain("--limit 2` for all 2 databases");
   });
 
+  it("carries --like and --views into the reveal hint", async () => {
+    stubSession({ DB: "SCOOPS_DB", SC: "PUBLIC" }, BASE_ROWS);
+    const output = (await tablesCommand.run(["--views", "--like", "o", "--limit", "2"])) as Record<string, unknown>;
+    expect((output.help as string[])[0]).toBe(
+      "Run `snowflake-axi tables SCOOPS_DB.PUBLIC --like o --views --limit 3` for all 3",
+    );
+  });
+
+  it("keeps the --like filter in the databases reveal hint, dropping the narrow note", async () => {
+    stubSession({ DB: null, SC: null }, null);
+    const output = (await tablesCommand.run(["--like", "db", "--limit", "1"])) as Record<string, unknown>;
+    expect((output.help as string[])[0]).toBe("Run `snowflake-axi tables --like db --limit 2` for all 2 databases");
+  });
+
   it("falls back to the schema summary when the session has a database but no schema", async () => {
     stubSession({ DB: "SCOOPS_DB", SC: null }, []);
     const output = (await tablesCommand.run([])) as Record<string, unknown>;
@@ -84,7 +98,7 @@ describe("tables command", () => {
     const filtered = (await tablesCommand.run(["--like", "raw"])) as Record<string, unknown>;
     expect(filtered.databases).toEqual([{ name: "RAW_DB" }]);
     const none = (await tablesCommand.run(["--like", "nope"])) as Record<string, unknown>;
-    expect(none.count).toBe("0 databases matching 'nope' readable with this role");
+    expect(none.count).toBe("0 databases matching '%nope%' readable with this role");
   });
 
   it("includes views with a kind column under --views", async () => {

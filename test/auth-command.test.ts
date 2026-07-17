@@ -6,14 +6,22 @@ const readAuthMode = vi.hoisted(() => vi.fn());
 const writeAuthMode = vi.hoisted(() => vi.fn());
 const readOAuthRing = vi.hoisted(() => vi.fn());
 
-vi.mock("../src/config.js", async (importOriginal) => ({
-  ...(await importOriginal<object>()),
-  loadConfig,
-  patConfigured,
-  readAuthMode,
-  writeAuthMode,
-  readOAuthRing,
-}));
+vi.mock("../src/config.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/config.js")>();
+  return {
+    ...original,
+    loadConfig,
+    patConfigured,
+    readAuthMode,
+    writeAuthMode,
+    readOAuthRing,
+    // Mirrors the real implementation over the mocked ring reader.
+    ringLogins: () => {
+      const ring = readOAuthRing();
+      return ring ? original.oauthRingKeys(ring) : [];
+    },
+  };
+});
 
 import { authCommand } from "../src/commands/auth.js";
 

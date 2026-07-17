@@ -4,6 +4,8 @@ import { AxiError } from "axi-sdk-js";
 // write. There is no write-head enumeration: `query`/`pg query` read for free
 // and gate any non-read behind the write grant, so the set of runnable writes
 // is "whatever the granted role allows", not a curated list.
+// These head sets are restated in prose by the query/pg-query notes, the
+// grant descriptions in grants.ts, and skill/SKILL.md; update those together.
 const SNOWFLAKE_READ_HEADS = new Set(["SELECT", "WITH", "SHOW", "DESC", "DESCRIBE", "EXPLAIN"]);
 const PG_READ_HEADS = new Set(["SELECT", "WITH", "TABLE", "VALUES", "SHOW", "EXPLAIN"]);
 
@@ -153,7 +155,7 @@ function scanStatement(
   return { head, sql: stripped, tokens };
 }
 
-export type StatementKind = "read" | "write";
+type StatementKind = "read" | "write";
 
 export interface ClassifiedStatement {
   head: string;
