@@ -1,7 +1,7 @@
 {
   "name": "snowflake-axi",
   "version": "0.1.0",
-  "description": "Read-only Snowflake explorer for agents; TOON output, SELECT-only",
+  "description": "Snowflake explorer for agents; TOON output, reads free, writes by consent",
   "license": "MIT",
   "author": "Anthony Gagliano",
   "repository": {
