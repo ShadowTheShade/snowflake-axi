@@ -4,8 +4,6 @@ Read-only Snowflake explorer for coding agents, built on the [AXI principles](ht
 It replaces heavier MCP paths for read and discovery work: zero standing token cost (invoked via Bash on demand) and ~40% leaner output than JSON.
 Statements run over the Snowflake SQL API with the PAT as a bearer token - one stateless HTTPS request, no driver, no login handshake - so a full query round trip completes in about half a second.
 
-Status: functional, not yet published to npm.
-
 ## Usage
 
 ```sh
@@ -42,7 +40,8 @@ snowflake-axi hooks           # session-start hook status; see Agent integration
 snowflake-axi <command> --help
 ```
 
-Until published, install with `npm install && npm run build && npm link` from a checkout.
+Install globally with `npm install -g snowflake-axi`, or run without installing via `npx snowflake-axi <command>`.
+From a checkout, use `npm install && npm run build && npm link`.
 
 ## Configuration
 

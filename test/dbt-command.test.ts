@@ -107,8 +107,8 @@ describe("dbt describe", () => {
 
   it("lists ambiguous matches instead of guessing", async () => {
     runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
-    const output = (await dbtCommand.run(["describe", "usage"])) as Record<string, unknown>;
-    expect(output.count).toBe("2 dbt projects match 'USAGE'");
+    const output = (await dbtCommand.run(["describe", "my_pro"])) as Record<string, unknown>;
+    expect(output.count).toBe("2 dbt projects match 'MY_PRO'");
     expect(output.matches).toEqual([
       { project: "STITCH_DB.METRICS.MY_PROJECT" },
       { project: "STITCH_DB.DEV.MY_PROJECT_DEV" },
@@ -191,7 +191,7 @@ describe("dbt execute", () => {
 
   it("errors on ambiguous names with full-name suggestions", async () => {
     runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
-    await expect(dbtCommand.run(["execute", "usage", "--args", "build"])).rejects.toMatchObject({
+    await expect(dbtCommand.run(["execute", "my_pro", "--args", "build"])).rejects.toMatchObject({
       code: "AMBIGUOUS",
       suggestions: [
         'snowflake-axi dbt execute STITCH_DB.METRICS.MY_PROJECT --args "build"',
@@ -307,7 +307,7 @@ describe("dbt deploy", () => {
 
   it("errors on ambiguous names before writing", async () => {
     runQuery.mockResolvedValueOnce({ rows: [GIT_ROW, OTHER_ROW], total: 2 });
-    await expect(dbtCommand.run(["deploy", "usage"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
+    await expect(dbtCommand.run(["deploy", "my_pro"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
 
@@ -418,7 +418,7 @@ describe("dbt drop", () => {
 
   it("errors on ambiguous names before dropping", async () => {
     runQuery.mockResolvedValueOnce({ rows: [PROJECT_ROW, OTHER_ROW], total: 2 });
-    await expect(dbtCommand.run(["drop", "usage"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
+    await expect(dbtCommand.run(["drop", "my_pro"])).rejects.toMatchObject({ code: "AMBIGUOUS" });
     expect(runQuery).toHaveBeenCalledTimes(1);
   });
 });
