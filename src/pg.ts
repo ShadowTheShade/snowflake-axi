@@ -14,6 +14,8 @@ export interface PgQueryOptions {
   binds?: unknown[];
   maxRows?: number;
   timeoutSeconds?: number;
+  /** One-off database override; defaults to SNOWFLAKE_AXI_PG_DATABASE. */
+  database?: string;
 }
 
 export interface PgWriteResult {
@@ -29,6 +31,8 @@ export interface PgWriteResult {
 export interface PgWriteOptions {
   binds?: unknown[];
   timeoutSeconds?: number;
+  /** One-off database override; defaults to SNOWFLAKE_AXI_PG_DATABASE. */
+  database?: string;
 }
 
 const DEFAULT_TIMEOUT_S = 60;
@@ -42,12 +46,12 @@ for (const oid of [1082, 1083, 1114, 1184, 1266, 1186]) {
   pg.types.setTypeParser(oid, (value) => value);
 }
 
-function clientConfig(timeoutSeconds: number, readOnly = true): pg.ClientConfig {
+function clientConfig(timeoutSeconds: number, readOnly = true, database?: string): pg.ClientConfig {
   const config = loadPgConfig();
   return {
     host: config.host,
     port: config.port,
-    database: config.database,
+    database: database ?? config.database,
     user: config.user,
     password: config.password,
     ssl: config.sslmode === "disable" ? false : config.sslmode === "verify-full" ? true : { rejectUnauthorized: false },
@@ -68,7 +72,7 @@ function clientConfig(timeoutSeconds: number, readOnly = true): pg.ClientConfig 
  * the extended protocol also makes multi-statement SQL a server-side error.
  */
 export async function runPgQuery(sql: string, options: PgQueryOptions = {}): Promise<PgQueryResult> {
-  const client = new pg.Client(clientConfig(options.timeoutSeconds ?? DEFAULT_TIMEOUT_S));
+  const client = new pg.Client(clientConfig(options.timeoutSeconds ?? DEFAULT_TIMEOUT_S, true, options.database));
   try {
     await client.connect();
   } catch (err) {
@@ -91,7 +95,7 @@ export async function runPgQuery(sql: string, options: PgQueryOptions = {}): Pro
  * the extended protocol, so multi-statement SQL is a server-side error here too.
  */
 export async function runPgWrite(sql: string, options: PgWriteOptions = {}): Promise<PgWriteResult> {
-  const client = new pg.Client(clientConfig(options.timeoutSeconds ?? DEFAULT_TIMEOUT_S, false));
+  const client = new pg.Client(clientConfig(options.timeoutSeconds ?? DEFAULT_TIMEOUT_S, false, options.database));
   try {
     await client.connect();
   } catch (err) {

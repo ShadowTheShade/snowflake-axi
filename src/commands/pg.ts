@@ -1,5 +1,5 @@
 import { AxiError } from "axi-sdk-js";
-import { type CommandArgs, defineCommand } from "../command.js";
+import { type CommandArgs, defineCommand, type FlagDef } from "../command.js";
 import { loadPgConfig } from "../config.js";
 import { humanBytes, revealFlags, shapeRows, startTimer, truncationHint } from "../format.js";
 import { requireGrant } from "../grants.js";
@@ -15,9 +15,27 @@ const KIND_LABELS: Record<string, string> = { r: "TABLE", p: "TABLE", v: "VIEW",
 // literal in LIKE.
 const USER_SCHEMAS = `n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\\_%'`;
 
-function connectionLabel(): string {
+// Every subcommand accepts a one-off database override so prod/dev switching
+// is a single flag rather than an env-file edit; the connection is otherwise
+// pinned to SNOWFLAKE_AXI_PG_DATABASE.
+const DATABASE_FLAG: FlagDef = {
+  type: "string",
+  placeholder: "<name>",
+  description: "Postgres database for this call, overriding SNOWFLAKE_AXI_PG_DATABASE",
+};
+
+/** Reads and validates --database; an unquoted identifier or nothing. */
+function pgDatabase(args: CommandArgs): string | undefined {
+  const database = args.str("--database");
+  if (database !== undefined && !IDENTIFIER.test(database)) {
+    throw new AxiError(`Invalid database '${database}'`, "VALIDATION_ERROR", ["Use an unquoted identifier"]);
+  }
+  return database;
+}
+
+function connectionLabel(database?: string): string {
   const config = loadPgConfig();
-  return `${config.user}@${config.host}:${config.port}/${config.database} (read-only)`;
+  return `${config.user}@${config.host}:${config.port}/${database ?? config.database} (read-only)`;
 }
 
 /** Shapes rows the way `pg query` reports them: definitive completeness, cell truncation, follow-up hints. */
@@ -62,7 +80,7 @@ const LOOKUP_FROM = `FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespa
 const LOOKUP_WHERE = `c.relkind IN ('r','p','v','m') AND NOT c.relispartition AND ${USER_SCHEMAS}`;
 
 /** Finds the one relation a name refers to; ambiguity and misses fail loud with the candidates. */
-async function resolvePgTable(raw: string, extraFields = ""): Promise<Record<string, unknown>> {
+async function resolvePgTable(raw: string, extraFields = "", database?: string): Promise<Record<string, unknown>> {
   const name = parsePgName(raw);
   const binds: unknown[] = [name.table];
   let filter = "lower(c.relname) = lower($1)";
@@ -72,7 +90,7 @@ async function resolvePgTable(raw: string, extraFields = ""): Promise<Record<str
   }
   const { rows } = await runPgQuery(
     `SELECT ${LOOKUP_FIELDS}${extraFields} ${LOOKUP_FROM} WHERE ${LOOKUP_WHERE} AND ${filter} ORDER BY 1`,
-    { binds },
+    { binds, database },
   );
   if (rows.length === 0) {
     throw new AxiError(`Table '${raw}' not found`, "PG_ERROR", [
@@ -107,6 +125,7 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
   const like = args.str("--like");
   const limit = args.int("--limit");
   const includeViews = args.bool("--views");
+  const database = pgDatabase(args);
 
   const binds: unknown[] = [];
   let filter = "";
@@ -122,10 +141,11 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
     `SELECT ${LOOKUP_FIELDS} ${LOOKUP_FROM}
      WHERE ${LOOKUP_WHERE}${filter}
      ORDER BY pg_total_relation_size(c.oid) DESC, 1, 2`,
-    { binds },
+    { binds, database },
   );
 
-  const scopeLabel = schema === undefined ? loadPgConfig().database : `${loadPgConfig().database}.${schema}`;
+  const db = database ?? loadPgConfig().database;
+  const scopeLabel = schema === undefined ? db : `${db}.${schema}`;
   const matchLabel = matchingLabel(like);
   const views = rows.filter((row) => row.kind === "v" || row.kind === "m");
   const listed = includeViews ? rows : rows.filter((row) => row.kind !== "v" && row.kind !== "m");
@@ -133,7 +153,7 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
   if (listed.length === 0) {
     const viewNote = !includeViews && views.length > 0 ? ` (${views.length} views excluded; use --views)` : "";
     return {
-      connection: connectionLabel(),
+      connection: connectionLabel(database),
       count: `0 tables${matchLabel} in ${scopeLabel}${viewNote}`,
     };
   }
@@ -151,7 +171,7 @@ async function runTables(args: CommandArgs): Promise<Record<string, unknown>> {
     );
   }
   return {
-    connection: connectionLabel(),
+    connection: connectionLabel(database),
     count: `${listed.length} tables${matchLabel} in ${scopeLabel}, largest first (rows are planner estimates)${viewNote}`,
     tables: shown.map((row) => ({
       ...(schema === undefined ? { schema: row.schema } : {}),
@@ -181,7 +201,7 @@ const SCHEMA_DETAILS = `,
 
 async function runSchema(args: CommandArgs): Promise<Record<string, unknown>> {
   const raw = args.positionals[0];
-  const row = await resolvePgTable(raw, SCHEMA_DETAILS);
+  const row = await resolvePgTable(raw, SCHEMA_DETAILS, pgDatabase(args));
   const columns = (row.columns ?? []) as { name: string; type: string; null: string; default: string | null }[];
   const pk = row.pk as string[] | null;
   const qualified = `${row.schema}.${row.name}`;
@@ -207,15 +227,16 @@ async function runSample(args: CommandArgs): Promise<Record<string, unknown>> {
 
   const fields = args.str("--fields");
   const select = fields === undefined ? "*" : parseFields(fields, "lower");
+  const database = pgDatabase(args);
 
-  const row = await resolvePgTable(args.positionals[0]);
+  const row = await resolvePgTable(args.positionals[0], "", database);
   const qualified = `${row.schema}.${row.name}`;
   const where = args.str("--where");
   const whereClause = where === undefined ? "" : ` WHERE ${where}`;
 
   const sql = `SELECT ${select} FROM ${quoteIdent(String(row.schema))}.${quoteIdent(String(row.name))}${whereClause} LIMIT ${limit}`;
   assertPgReadOnly(sql);
-  const result = await runPgQuery(sql, { maxRows: limit });
+  const result = await runPgQuery(sql, { maxRows: limit, database });
 
   if (result.rows.length === 0) {
     const scope = whereClause ? ` matching --where in ${qualified}` : ` in ${qualified}`;
@@ -255,6 +276,7 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   const timeout = args.int("--timeout");
   const full = args.bool("--full");
   const forceWrite = args.bool("--write");
+  const database = pgDatabase(args);
 
   const rawSql = args.positionals.join(" ").trim();
   if (!rawSql) {
@@ -267,11 +289,11 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
   // by prefix but writes in fact, so --write forces the read-write session and
   // the grant; the server privileges remain the hard boundary either way.
   if (kind === "read" && !forceWrite) {
-    const result = await runPgQuery(sql, { maxRows: limit, timeoutSeconds: timeout });
+    const result = await runPgQuery(sql, { maxRows: limit, timeoutSeconds: timeout, database });
     return { ...presentPgRows(result, full, limit), elapsed: elapsed() };
   }
   requireGrant("pg.write");
-  const result = await runPgWrite(sql, { timeoutSeconds: timeout });
+  const result = await runPgWrite(sql, { timeoutSeconds: timeout, database });
   return { ...presentPgWrite(result, full), elapsed: elapsed() };
 }
 
@@ -287,7 +309,7 @@ export const pgCommand = defineCommand("pg", {
     describe: ["Run `snowflake-axi pg schema <table>` for columns"],
     desc: ["Run `snowflake-axi pg schema <table>` for columns"],
     databases: [
-      "The connection is pinned to one database (SNOWFLAKE_AXI_PG_DATABASE)",
+      "Switch database per call with `--database <name>` on any pg command, or set SNOWFLAKE_AXI_PG_DATABASE",
       'Run `snowflake-axi pg query "SELECT datname FROM pg_database WHERE NOT datistemplate"` to list them',
     ],
     exec: WRITE_HINT,
@@ -313,17 +335,24 @@ export const pgCommand = defineCommand("pg", {
         },
         "--views": { type: "boolean", description: "include views and materialized views, adds a kind column" },
         "--limit": { type: "int", placeholder: "<n>", description: "max rows shown", default: 100, min: 1, max: 10000 },
+        "--database": DATABASE_FLAG,
       },
       notes: [
         "Row counts are planner estimates (reltuples); ? means the table was never analyzed.",
         "System schemas (pg_catalog, information_schema) are always excluded.",
+        "The connection is pinned to one database; --database <name> switches it per call (e.g. prod vs dev).",
       ],
-      examples: ["snowflake-axi pg", "snowflake-axi pg tables public --like orders"],
+      examples: [
+        "snowflake-axi pg",
+        "snowflake-axi pg tables public --like orders",
+        "snowflake-axi pg tables --database dev",
+      ],
       run: runTables,
     },
     schema: {
       description: "Columns with types, nullability, and defaults, plus primary key and size",
       positionals: { usage: "<table>", min: 1, max: 1 },
+      flags: { "--database": DATABASE_FLAG },
       notes: ["Names resolve as table or schema.table, case-insensitive; ambiguous names list the candidates."],
       examples: ["snowflake-axi pg schema orders", "snowflake-axi pg schema app.users"],
       run: runSchema,
@@ -336,6 +365,7 @@ export const pgCommand = defineCommand("pg", {
         "--fields": { type: "string", placeholder: "<a,b,c>", description: "columns to select (default all)" },
         "--where": { type: "string", placeholder: '"<predicate>"', description: "SQL predicate to filter by" },
         "--full": { type: "boolean", description: `disable ${CELL_LIMIT}-char cell truncation` },
+        "--database": DATABASE_FLAG,
       },
       examples: [
         "snowflake-axi pg sample orders --limit 3 --fields id,status,created_at",
@@ -369,6 +399,7 @@ export const pgCommand = defineCommand("pg", {
           min: 1,
           max: 3600,
         },
+        "--database": DATABASE_FLAG,
       },
       notes: [
         "Reads (SELECT, WITH, TABLE, VALUES, SHOW, EXPLAIN) run on a server read-only session and need no grant.",

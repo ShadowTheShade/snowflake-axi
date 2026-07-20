@@ -269,6 +269,8 @@ SNOWFLAKE_AXI_PG_DATABASE=<optional, default postgres>
 SNOWFLAKE_AXI_PG_SSLMODE=<optional: disable, require (default), verify-full>
 ```
 
+The connection is pinned to one database; pass `--database <name>` on any `pg` command to switch per call - handy for hopping between prod and dev - or set `SNOWFLAKE_AXI_PG_DATABASE` for the default.
+
 `pg query` reads on a session opened `default_transaction_read_only=on`, so even DML smuggled past the head check is rejected by the server; writes run on a read-write session behind `pg.write`.
 `EXPLAIN ANALYZE` is classified by what it wraps, since it executes what it plans.
 A read that writes in fact - a `SELECT` calling a `VOLATILE` function that performs `INSERT`/`TRUNCATE` - is rejected by the read-only session; pass `--write` to route it through the read-write session:

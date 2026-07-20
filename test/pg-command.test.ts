@@ -330,6 +330,29 @@ describe("pg query", () => {
   });
 });
 
+describe("pg --database", () => {
+  it("overrides the connection database for tables, in the query and the labels", async () => {
+    runPgQuery.mockResolvedValueOnce({ rows: [catalogRow()], complete: true, numericColumns: new Set() });
+    const output = (await pgCommand.run(["tables", "--database", "dev"])) as Record<string, unknown>;
+    expect(runPgQuery.mock.calls[0][1]).toEqual({ binds: [], database: "dev" });
+    expect(output.connection).toBe("svc@pg.example.com:5432/dev (read-only)");
+    expect(output.count).toContain("in dev");
+  });
+
+  it("threads --database through a read query", async () => {
+    runPgQuery.mockResolvedValueOnce({ rows: [{ n: "1" }], complete: true, numericColumns: new Set(["n"]) });
+    await pgCommand.run(["query", "--database", "prod", "SELECT 1 AS n"]);
+    expect(runPgQuery.mock.calls[0][1]).toEqual({ maxRows: 50, timeoutSeconds: 60, database: "prod" });
+  });
+
+  it("rejects a non-identifier database before touching the connection", async () => {
+    await expect(pgCommand.run(["tables", "--database", "bad name"])).rejects.toMatchObject({
+      code: "VALIDATION_ERROR",
+    });
+    expect(runPgQuery).not.toHaveBeenCalled();
+  });
+});
+
 describe("pg verb hints", () => {
   it("redirects write verbs to pg query instead of misparsing them", async () => {
     await expect(pgCommand.run(["insert", "into", "t"])).rejects.toMatchObject({
