@@ -1,6 +1,6 @@
 {
   "name": "snowflake-axi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Snowflake explorer for agents; TOON output, reads free, writes by consent",
   "license": "MIT",
   "author": "Anthony Gagliano",
@@ -20,6 +20,7 @@
     "dbt"
   ],
   "type": "module",
+  "types": "dist/index.d.ts",
   "bin": {
     "snowflake-axi": "dist/bin/snowflake-axi.js",
     "snowflake-axi-context": "dist/bin/snowflake-axi-context.js"
