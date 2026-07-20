@@ -87,6 +87,7 @@ Run `snowflake-axi <command> --help` for a command's flags and examples.
 | `pg schema <table>` | Columns, nullability, defaults, primary key, size (case-insensitive names) |
 | `pg sample <table>` | Preview Postgres rows; `--fields`, `--where`, `--limit`, `--full` |
 | `pg query <sql>` | One statement; reads free on a read-only session, writes behind the `pg.write` grant |
+| `pg dbt <args>` | Run classic dbt-postgres against the serving plane with managed creds; read verbs free, write verbs behind `pg.write` |
 
 **Auth and setup**
 
@@ -280,6 +281,25 @@ snowflake-axi pg query --write "SELECT dim_ingest.refresh_all('light')"
 ```
 
 Row counts in `pg tables`/`pg schema` are planner estimates; `pg query` probes one row past `--limit`, reporting an exact `N (complete)` or an honest `first N rows (more exist)`.
+
+### Classic dbt against Postgres
+
+`pg dbt <args>` runs a dbt project against Snowflake Postgres, the Postgres counterpart to the Snowflake-side [local dbt](#local-dbt).
+It is a thin passthrough: the verb and every dbt flag (`--select`, `--exclude`, `--full-refresh`, ...) go straight to dbt, while `--database`, `--target`, `--project-dir`, and `--timeout` are read by the wrapper.
+
+```sh
+snowflake-axi pg dbt compile --select <selector> --database <db>
+snowflake-axi pg dbt build --select tag:<tag> --database <db>
+snowflake-axi pg dbt run-operation <macro> --database <db>
+```
+
+It runs a managed, pinned `dbt-core` + `dbt-postgres` 1.8 - classic dbt, not Fusion - so a local run matches a serving-plane deployment verb for verb.
+The runtime is a venv under the config directory, provisioned on first use via `uv` (or `python3`); point `SNOWFLAKE_AXI_DBT_PG_BIN` at your own dbt to skip it.
+Credentials come from the same `SNOWFLAKE_AXI_PG_*` connection above, injected into an ephemeral profile so the repo keeps a credential-less committed `profiles.yml`; the password stays off disk behind an env var, and the wrapper also injects `--profiles-dir`, `--target`, and `--no-version-check`.
+The project root is `--project-dir`, else `SNOWFLAKE_AXI_DBT_PG_PROJECT_DIR`, else the working directory; the target is `--target`, else `SNOWFLAKE_AXI_DBT_PG_TARGET`, else the profile's own default (and it must be a `postgres` target).
+`--database` sets the dbt dbname for the call, defaulting to `SNOWFLAKE_AXI_PG_DATABASE`, so hopping between prod and dev stays a one-flag switch.
+
+Read verbs (`compile`, `ls`, `parse`, `deps`, `debug`, `docs`, `source`, `show`) run free; write verbs (`build`, `run`, `run-operation`, `seed`, `snapshot`, `test`, and anything else) are refused until the user grants `pg.write` - the same grant as `pg query --write`.
 
 ## Agent integration
 

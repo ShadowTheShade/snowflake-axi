@@ -5,11 +5,12 @@ description: >
   search objects account-wide, inspect schemas, sample rows, run SELECT queries,
   discover semantic views with verified queries, check warehouse credit burn, read
   dbt model SQL, compile local dbt repos, browse git repositories on Snowflake,
-  peek staged parquet files, and explore Snowflake Postgres (pg tables/schema/sample/query,
-  read-only). Use for ANY Snowflake or Snowflake Postgres read or discovery task instead
-  of an MCP tool or hand-rolled connector. Writes (Snowflake writes through `query` via the sql.write
-  grant, local dbt run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, Postgres writes
-  through `pg query` via the pg.write grant) exist but stay locked until the user grants them.
+  peek staged parquet files, explore Snowflake Postgres (pg tables/schema/sample/query,
+  read-only), and run classic dbt-postgres against it (pg dbt). Use for ANY Snowflake or
+  Snowflake Postgres read or discovery task instead of an MCP tool or hand-rolled connector.
+  Writes (Snowflake writes through `query` via the sql.write grant, local dbt
+  run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, Postgres writes through
+  `pg query` and write-verb `pg dbt` runs via the pg.write grant) exist but stay locked until the user grants them.
 user-invocable: false
 ---
 
@@ -60,6 +61,8 @@ snowflake-axi pg schema orders              # columns, types, defaults, primary 
 snowflake-axi pg sample orders --limit 3 --fields id,status
 snowflake-axi pg query "SELECT count(*) FROM orders"   # reads free (server read-only session)
 snowflake-axi pg query "UPDATE <table> SET ..."        # write: refused until pg.write is granted
+snowflake-axi pg dbt compile --select <selector>       # classic dbt-postgres (pinned 1.8), read verb, free
+snowflake-axi pg dbt build --select <selector> --database <db>   # write: refused until pg.write is granted
 snowflake-axi allow                         # write capabilities and their grant status
 snowflake-axi login --role <role>           # browser SSO login via Snowflake OAuth (alternative to PAT auth)
 snowflake-axi logout --role <role>          # remove an OAuth login from the token ring (--all for every login)

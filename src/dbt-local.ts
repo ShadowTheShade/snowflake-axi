@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -15,6 +14,7 @@ import { join, resolve } from "node:path";
 import { AxiError } from "axi-sdk-js";
 import { parse as parseYaml } from "yaml";
 import { type AuthMode, envFilePath, loadConfig } from "./config.js";
+import { type DbtExit, errorLines, FAILURE_STATUSES, readRunResults, spawnDbt, statusCounts } from "./dbt-run.js";
 import { startTimer } from "./format.js";
 import { hasLogin, refreshedAccessToken } from "./oauth.js";
 
@@ -49,7 +49,6 @@ const AUTH_FIELDS = new Set([
 ]);
 
 const MAX_NODE_ROWS = 100;
-const FAILURE_STATUSES = new Set(["error", "fail", "runtime error"]);
 
 export type LocalVerb = "compile" | "build" | "run" | "test" | "seed" | "snapshot";
 
@@ -129,7 +128,14 @@ export function resolveProject(projectDirFlag: string | undefined): DbtProject {
   };
 }
 
-export function loadOutputs(project: DbtProject): Record<string, Record<string, unknown>> {
+export interface DbtProfile {
+  outputs: Record<string, Record<string, unknown>>;
+  /** The profile's own `target:` default, if it declares one. */
+  defaultTarget?: string;
+}
+
+/** Reads the repo's profiles.yml: the named profile's targets and its declared default target. */
+export function loadProfile(project: DbtProject): DbtProfile {
   const file = join(project.dir, "profiles.yml");
   if (!existsSync(file)) {
     throw new AxiError(`No profiles.yml next to dbt_project.yml in ${project.dir}`, "CONFIG_ERROR", [
@@ -147,15 +153,22 @@ export function loadOutputs(project: DbtProject): Record<string, Record<string, 
       [available.length > 0 ? `Profiles present: ${available.join(", ")}` : "The file defines no profiles"],
     );
   }
-  const outputs = (profile as Record<string, unknown>).outputs;
-  if (typeof outputs !== "object" || outputs === null) {
+  const record = profile as Record<string, unknown>;
+  if (typeof record.outputs !== "object" || record.outputs === null) {
     throw new AxiError(`Profile '${project.profileName}' in profiles.yml has no outputs`, "CONFIG_ERROR");
   }
-  return Object.fromEntries(
-    Object.entries(outputs as Record<string, unknown>).filter(
-      (entry): entry is [string, Record<string, unknown>] => typeof entry[1] === "object" && entry[1] !== null,
+  return {
+    outputs: Object.fromEntries(
+      Object.entries(record.outputs as Record<string, unknown>).filter(
+        (entry): entry is [string, Record<string, unknown>] => typeof entry[1] === "object" && entry[1] !== null,
+      ),
     ),
-  );
+    defaultTarget: typeof record.target === "string" ? record.target : undefined,
+  };
+}
+
+export function loadOutputs(project: DbtProject): Record<string, Record<string, unknown>> {
+  return loadProfile(project).outputs;
 }
 
 export function resolveTarget(
@@ -220,118 +233,11 @@ export function buildEphemeralProfile(
   };
 }
 
-interface DbtExit {
-  code: number;
-  tail: string[];
-  /** Full stdout, kept apart from stderr so verbs like `ls` can parse it (the human log goes to stderr). */
-  stdout: string;
-}
-
-function runDbt(argv: string[], env: NodeJS.ProcessEnv, timeoutSeconds: number): Promise<DbtExit> {
-  return new Promise((resolveExit, reject) => {
-    const child = spawn("dbt", argv, { env, stdio: ["ignore", "pipe", "pipe"] });
-    let buffered = "";
-    let stdout = "";
-    // Everything dbt emits is mirrored to our stderr so the human sees the live
-    // log without polluting our stdout (the JSON result); stdout is also kept
-    // whole for verbs whose payload is what dbt prints, like `ls`.
-    const onStdout = (chunk: Buffer) => {
-      process.stderr.write(chunk);
-      const text = chunk.toString();
-      buffered = (buffered + text).slice(-16384);
-      stdout = (stdout + text).slice(-1_000_000);
-    };
-    const onStderr = (chunk: Buffer) => {
-      process.stderr.write(chunk);
-      buffered = (buffered + chunk.toString()).slice(-16384);
-    };
-    child.stdout?.on("data", onStdout);
-    child.stderr?.on("data", onStderr);
-    let timedOut = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      child.kill("SIGTERM");
-      setTimeout(() => child.kill("SIGKILL"), 5000).unref();
-    }, timeoutSeconds * 1000);
-    child.on("error", (error: NodeJS.ErrnoException) => {
-      clearTimeout(timer);
-      if (error.code === "ENOENT") {
-        reject(
-          new AxiError("The dbt CLI is not installed or not on PATH", "CONFIG_ERROR", [
-            "Install it with `uv tool install dbt-core --with dbt-snowflake` (or pipx/pip)",
-          ]),
-        );
-        return;
-      }
-      reject(error);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (timedOut) {
-        reject(
-          new AxiError(`dbt did not finish within ${timeoutSeconds}s`, "TIMEOUT", [
-            "Raise --timeout, or narrow the run with --select",
-          ]),
-        );
-        return;
-      }
-      resolveExit({ code: code ?? 1, tail: buffered.split("\n"), stdout });
-    });
-  });
-}
-
-interface NodeRow {
-  node: string;
-  type: string;
-  status: string;
-  time: string;
-  detail: string;
-}
-
-function shapeResult(raw: unknown): NodeRow {
-  const rec = (typeof raw === "object" && raw !== null ? raw : {}) as Record<string, unknown>;
-  const uniqueId = typeof rec.unique_id === "string" ? rec.unique_id : "";
-  const [type, , ...rest] = uniqueId.split(".");
-  const message = typeof rec.message === "string" ? rec.message : "";
-  const seconds = typeof rec.execution_time === "number" ? rec.execution_time : 0;
-  return {
-    node: rest.join(".") || uniqueId,
-    type: type || "node",
-    status: String(rec.status ?? ""),
-    time: `${seconds.toFixed(1)}s`,
-    detail: message.replace(/\s+/g, " ").slice(0, 140),
-  };
-}
-
-function readRunResults(project: DbtProject, startedMs: number): NodeRow[] | undefined {
-  const file = join(project.dir, project.targetPath, "run_results.json");
-  try {
-    if (statSync(file).mtimeMs < startedMs - 2000) return undefined;
-  } catch {
-    return undefined;
-  }
-  let parsed: { results?: unknown };
-  try {
-    parsed = JSON.parse(readFileSync(file, "utf8")) as { results?: unknown };
-  } catch {
-    return undefined;
-  }
-  if (!Array.isArray(parsed.results)) return undefined;
-  return parsed.results.map(shapeResult);
-}
-
-function statusCounts(rows: NodeRow[]): string {
-  const counts = new Map<string, number>();
-  for (const row of rows) counts.set(row.status, (counts.get(row.status) ?? 0) + 1);
-  return [...counts.entries()].map(([status, n]) => `${n} ${status}`).join(", ");
-}
-
-function errorLines(tail: string[]): string[] {
-  const cleaned = tail.map((line) => line.replace(/^\d{2}:\d{2}:\d{2}\s+/, "").trim()).filter(Boolean);
-  const errors = cleaned.filter((line) => /error|fail/i.test(line));
-  const picked = (errors.length > 0 ? errors : cleaned).slice(-8);
-  return picked.length > 0 ? picked : ["dbt produced no output; run dbt manually in the project to inspect"];
-}
+// dbt-snowflake is installed by the operator; pg-dbt manages its own venv instead.
+const dbtMissing = () =>
+  new AxiError("The dbt CLI is not installed or not on PATH", "CONFIG_ERROR", [
+    "Install it with `uv tool install dbt-core --with dbt-snowflake` (or pipx/pip)",
+  ]);
 
 /** Help lines for a failed dbt run: the error tail, plus the OAuth pinned-role hint when it smells role-related. */
 function dbtFailureHelp(auth: string, tail: string[]): string[] {
@@ -478,14 +384,14 @@ export async function runLocalDbt(options: LocalDbtOptions): Promise<Record<stri
   const timer = startTimer();
   let exit: DbtExit;
   try {
-    exit = await runDbt(argv, env, options.timeoutSeconds);
+    exit = await spawnDbt("dbt", argv, env, options.timeoutSeconds, dbtMissing);
   } finally {
     rmSync(profilesDir, { recursive: true, force: true });
   }
 
   const elapsed = timer();
   const command = `dbt ${options.verb}${options.select ? ` --select ${options.select}` : ""}`;
-  const results = readRunResults(project, started);
+  const results = readRunResults(join(project.dir, project.targetPath, "run_results.json"), started);
 
   const failures = (results ?? []).filter((row) => FAILURE_STATUSES.has(row.status));
   if (failures.length > 0) {
@@ -566,7 +472,7 @@ export async function runLocalList(options: LocalListOptions): Promise<Record<st
 
   let exit: DbtExit;
   try {
-    exit = await runDbt(argv, env, options.timeoutSeconds);
+    exit = await spawnDbt("dbt", argv, env, options.timeoutSeconds, dbtMissing);
   } finally {
     rmSync(profilesDir, { recursive: true, force: true });
   }

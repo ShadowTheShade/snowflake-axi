@@ -36,6 +36,8 @@ export interface PositionalsDef {
 /** Parsed, validated arguments handed to an action's run. */
 export interface CommandArgs {
   positionals: string[];
+  /** The action's argv exactly as received, before any flag parsing; a passthrough action reads only this. */
+  raw: string[];
   str(name: string): string | undefined;
   int(name: string): number;
   bool(name: string): boolean;
@@ -48,6 +50,13 @@ export interface ActionDef {
   flags?: Record<string, FlagDef>;
   notes?: string[];
   examples?: string[];
+  /**
+   * Forward argv verbatim: skip flag parsing and arity checks, and hand run()
+   * the raw args (via CommandArgs.raw) to extract its own flags from and pass
+   * the rest to a wrapped tool. `flags` and `positionals` still document the
+   * action's own options in --help. run() sees `raw`; str/int/bool are inert.
+   */
+  passthrough?: boolean;
   run(args: CommandArgs): Promise<CommandOutput> | CommandOutput;
 }
 
@@ -102,6 +111,12 @@ function checkArity(displayName: string, action: ActionDef, count: number): void
 }
 
 function parseActionArgs(displayName: string, action: ActionDef, argv: string[]): CommandArgs {
+  if (action.passthrough) {
+    const inert = () => {
+      throw new Error(`${displayName} is a passthrough action; read args.raw instead of str/int/bool`);
+    };
+    return { positionals: [], raw: argv, str: inert, int: inert, bool: inert };
+  }
   const defs = action.flags ?? {};
   const known: Record<string, FlagSpec> = {};
   for (const [name, def] of Object.entries(defs)) {
@@ -111,6 +126,7 @@ function parseActionArgs(displayName: string, action: ActionDef, argv: string[])
   checkArity(displayName, action, positionals.length);
   return {
     positionals,
+    raw: argv,
     str: (name) => {
       const value = flags[name];
       return typeof value === "string" ? value : undefined;

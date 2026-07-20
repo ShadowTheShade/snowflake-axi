@@ -5,6 +5,7 @@ import { humanBytes, revealFlags, shapeRows, startTimer, truncationHint } from "
 import { requireGrant } from "../grants.js";
 import { IDENTIFIER, likePattern, matchingLabel, parseFields } from "../names.js";
 import { type PgQueryResult, type PgWriteResult, runPgQuery, runPgWrite } from "../pg.js";
+import { RUNTIME_LABEL, runPgDbt } from "../pg-dbt.js";
 import { CELL_LIMIT } from "../present.js";
 import { assertPgReadOnly, classifyPgStatement } from "../validate.js";
 
@@ -413,6 +414,45 @@ export const pgCommand = defineCommand("pg", {
         "snowflake-axi pg query --write \"SELECT dim_ingest.refresh_all('light')\"",
       ],
       run: runQueryVerb,
+    },
+    dbt: {
+      description: `Run classic dbt (${RUNTIME_LABEL}) against Snowflake Postgres; reads free, writes via pg.write`,
+      passthrough: true,
+      positionals: { usage: "<dbt command> [dbt args]", min: 0, max: Number.POSITIVE_INFINITY },
+      flags: {
+        "--database": DATABASE_FLAG,
+        "--target": {
+          type: "string",
+          placeholder: "<name>",
+          description:
+            "postgres target from the repo's profiles.yml (default: SNOWFLAKE_AXI_DBT_PG_TARGET, else the profile's own default)",
+        },
+        "--project-dir": {
+          type: "string",
+          placeholder: "<path>",
+          description: "dbt project root (default: SNOWFLAKE_AXI_DBT_PG_PROJECT_DIR, else the current directory)",
+        },
+        "--timeout": {
+          type: "int",
+          placeholder: "<s>",
+          description: "kill the dbt subprocess after this many seconds",
+          default: 1800,
+          min: 1,
+          max: 14400,
+        },
+      },
+      notes: [
+        `Runs a managed, pinned ${RUNTIME_LABEL} venv (matching the serving-plane image, not dbt Fusion), provisioned on first use via uv or python3; point SNOWFLAKE_AXI_DBT_PG_BIN at your own dbt to skip it.`,
+        "All other arguments pass through to dbt verbatim; the tool injects --project-dir, --profiles-dir, --target, and --no-version-check, so do not pass -t or --profiles-dir yourself.",
+        "Credentials come from the SNOWFLAKE_AXI_PG_* settings, injected into an ephemeral profile (the password stays off disk via an env var); --database sets the dbt dbname for this call.",
+        "Read verbs (compile, ls, parse, deps, debug, docs, source, show) run free; write verbs (build, run, run-operation, seed, snapshot, test, and any other) are refused with WRITE_NOT_ALLOWED until the user grants pg.write.",
+      ],
+      examples: [
+        "snowflake-axi pg dbt compile --select <selector> --database <db>",
+        "snowflake-axi pg dbt build --select tag:<tag> --database <db>",
+        "snowflake-axi pg dbt run-operation <macro> --database <db>",
+      ],
+      run: (args) => runPgDbt(args.raw),
     },
   },
 });

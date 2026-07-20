@@ -202,6 +202,10 @@ function expandHome(path: string): string {
   return path === "~" || path.startsWith("~/") ? join(homedir(), path.slice(1)) : path;
 }
 
+function expandHomeIfSet(path: string | undefined): string | undefined {
+  return path === undefined ? undefined : expandHome(path);
+}
+
 function snowflakeHome(): string {
   return process.env.SNOWFLAKE_HOME || join(homedir(), ".snowflake");
 }
@@ -313,6 +317,30 @@ export function loadPgConfig(): PgConfig {
     sslmode: sslmode as PgConfig["sslmode"],
   };
   return cachedPg;
+}
+
+export interface DbtPgConfig {
+  /** Default dbt project root for `pg dbt`; else the working directory. */
+  projectDir?: string;
+  /** Default postgres target for `pg dbt`; else the repo profile's own default. */
+  target?: string;
+  /** Escape hatch: a user-managed dbt-postgres executable, used instead of the managed venv. */
+  bin?: string;
+}
+
+/**
+ * `pg dbt` settings, resolved independently of the Snowflake SQL API
+ * credentials (like loadPgConfig) so the classic dbt-postgres wrapper works
+ * even when only the SNOWFLAKE_AXI_PG_* connection is configured.
+ */
+export function loadDbtPgConfig(): DbtPgConfig {
+  const file = parseEnvFile(envFilePath());
+  const get = (key: string) => process.env[key] || file[key] || undefined;
+  return {
+    projectDir: expandHomeIfSet(get("SNOWFLAKE_AXI_DBT_PG_PROJECT_DIR")),
+    target: get("SNOWFLAKE_AXI_DBT_PG_TARGET"),
+    bin: expandHomeIfSet(get("SNOWFLAKE_AXI_DBT_PG_BIN")),
+  };
 }
 
 let cached: Config | undefined;
