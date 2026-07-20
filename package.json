@@ -26,7 +26,8 @@
   },
   "files": [
     "dist",
-    "skill"
+    "skill",
+    "env.template"
   ],
   "engines": {
     "node": ">=22"

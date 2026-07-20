@@ -37,6 +37,7 @@ snowflake-axi pg query "SELECT count(*) FROM orders"
 snowflake-axi pg query "UPDATE MY_TABLE SET status = 'done' WHERE id = 1"   # write, gated by pg.write
 snowflake-axi allow           # write capabilities and their grant status
 snowflake-axi hooks           # session-start hook status; see Agent integration
+snowflake-axi doctor          # diagnose connection setup and print a fix for anything wrong
 snowflake-axi <command> --help
 ```
 
@@ -46,6 +47,7 @@ From a checkout, use `npm install && npm run build && npm link`.
 ## Configuration
 
 Credentials live in `~/.config/snowflake-axi/env` (process env overrides file values, never commit this file).
+Copy `env.template` (shipped with the package) to that path as a starting point, then run `snowflake-axi doctor` to verify the connection and get a fix for anything missing.
 Three values are required for PAT auth (or skip the PAT entirely with browser SSO; see [Browser SSO login](#browser-sso-login-oauth)):
 
 ```

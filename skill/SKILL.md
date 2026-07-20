@@ -69,6 +69,7 @@ snowflake-axi role --grants                 # list every role granted to the use
 snowflake-axi auth                          # show the auth mode; `auth pat|oauth|default` switches (PAT is the default when configured)
 snowflake-axi context                       # one-line config-derived context (what session hooks print)
 snowflake-axi hooks                         # session-start hook status; install/remove via subcommands
+snowflake-axi doctor                        # diagnose setup: credentials, reachability, warehouse/namespace, roles, pg
 ```
 
 - Unqualified table names resolve against the Snowflake user's default namespace;

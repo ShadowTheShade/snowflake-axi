@@ -6,6 +6,7 @@ import { allowCommand } from "./commands/allow.js";
 import { authCommand } from "./commands/auth.js";
 import { contextCommand } from "./commands/context.js";
 import { dbtCommand } from "./commands/dbt.js";
+import { doctorCommand } from "./commands/doctor.js";
 import { findCommand } from "./commands/find.js";
 import { gitCommand } from "./commands/git.js";
 import { homeView } from "./commands/home.js";
@@ -47,6 +48,7 @@ export const CORE_COMMANDS: Record<string, CommandSpec> = {
   auth: authCommand,
   role: roleCommand,
   allow: allowCommand,
+  doctor: doctorCommand,
   context: contextCommand,
   hooks: hooksCommand,
 };
