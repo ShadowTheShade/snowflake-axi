@@ -9,8 +9,9 @@ description: >
   read-only), and run classic dbt-postgres against it (pg dbt). Use for ANY Snowflake or
   Snowflake Postgres read or discovery task instead of an MCP tool or hand-rolled connector.
   Writes (Snowflake writes through `query` via the sql.write grant, local dbt
-  run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, Postgres writes through
-  `pg query` and write-verb `pg dbt` runs via the pg.write grant) exist but stay locked until the user grants them.
+  run/build/test/seed/snapshot, dbt execute/deploy/drop, git fetch, stage copy/unload via
+  the stage.write grant, Postgres writes through `pg query` and write-verb `pg dbt` runs via
+  the pg.write grant) exist but stay locked until the user grants them.
 user-invocable: false
 ---
 
@@ -55,6 +56,8 @@ snowflake-axi git branches MY_DB.MY_SCHEMA.MY_REPO    # branches with commit has
 snowflake-axi git fetch MY_DB.MY_SCHEMA.MY_REPO       # write: refresh from origin, locked until granted
 snowflake-axi stage @DB.SCHEMA.STAGE        # list stage files
 snowflake-axi stage read @DB.SCHEMA.STAGE/file.parquet --limit 3
+snowflake-axi stage copy @DB.S.SRC/x/ @DB.S.DST/dev/x/       # write: COPY FILES between stages, locked until stage.write granted
+snowflake-axi stage unload FCT_ORDERS @DB.S.EXPORTS/orders/ --single --overwrite   # write: unload a table to a stage
 snowflake-axi pg                            # Snowflake Postgres: every schema's tables, largest first
 snowflake-axi pg tables public --like orders
 snowflake-axi pg schema orders              # columns, types, defaults, primary key

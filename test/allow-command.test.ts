@@ -32,6 +32,7 @@ describe("allow command", () => {
       expect.objectContaining({ capability: "dbt.deploy", granted: false }),
       expect.objectContaining({ capability: "dbt.drop", granted: false }),
       expect.objectContaining({ capability: "git.fetch", granted: false }),
+      expect.objectContaining({ capability: "stage.write", granted: false }),
       expect.objectContaining({ capability: "sql.write", granted: false }),
       expect.objectContaining({ capability: "pg.write", granted: false }),
     ]);
@@ -40,7 +41,9 @@ describe("allow command", () => {
   it("rejects unknown capabilities listing the valid ones", async () => {
     await expect(allowCommand.run(["dbt.destroy"])).rejects.toMatchObject({
       code: "VALIDATION_ERROR",
-      suggestions: ["Valid capabilities: dbt.build, dbt.execute, dbt.deploy, dbt.drop, git.fetch, sql.write, pg.write"],
+      suggestions: [
+        "Valid capabilities: dbt.build, dbt.execute, dbt.deploy, dbt.drop, git.fetch, stage.write, sql.write, pg.write",
+      ],
     });
   });
 
