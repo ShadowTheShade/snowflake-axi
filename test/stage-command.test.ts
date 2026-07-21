@@ -32,4 +32,21 @@ describe("stage command", () => {
     await expect(stageCommand.run(["not-a-stage"])).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
     expect(runQuery).not.toHaveBeenCalled();
   });
+
+  const files = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({ name: `stg/f${i}.parquet`, size: 1024, last_modified: "2026-01-01" }));
+
+  it("leads the count with shown-of-total when the listing is truncated", async () => {
+    runQuery.mockResolvedValueOnce({ rows: files(3) });
+    const output = (await stageCommand.run(["@DB.S.STG", "--limit", "2"])) as Record<string, unknown>;
+    expect(output.count).toBe("2 of 3 files shown, 3KB total");
+    expect((output.files as unknown[]).length).toBe(2);
+    expect((output.help as string[])[0]).toContain("--limit 3");
+  });
+
+  it("reports a plain total when nothing is truncated", async () => {
+    runQuery.mockResolvedValueOnce({ rows: files(3) });
+    const output = (await stageCommand.run(["@DB.S.STG"])) as Record<string, unknown>;
+    expect(output.count).toBe("3 files, 3KB total");
+  });
 });

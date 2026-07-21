@@ -249,7 +249,7 @@ describe("pg query", () => {
     >;
     expect(requireGrant).toHaveBeenCalledWith("pg.write");
     expect(runPgWrite.mock.calls[0][0]).toBe("UPDATE orders SET status = 'shipped' WHERE id < 4");
-    expect(runPgWrite.mock.calls[0][1]).toEqual({ timeoutSeconds: 60 });
+    expect(runPgWrite.mock.calls[0][1]).toEqual({ timeoutSeconds: 300, database: undefined });
     expect(output.command).toBe("UPDATE");
     expect(output.affected).toBe(3);
     expect(output.returned).toBeUndefined();

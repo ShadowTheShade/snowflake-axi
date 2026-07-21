@@ -63,6 +63,22 @@ describe("query command", () => {
     expect(output.help).toBeUndefined();
   });
 
+  it("defaults a write to a 300s timeout and a COPY to 900s", async () => {
+    runQuery.mockResolvedValue({ rows: [], total: 0 });
+    await queryCommand.run(["DELETE FROM FCT_ORDERS WHERE ID = 1"]);
+    expect(runQuery.mock.calls[0][1]).toMatchObject({ timeoutSeconds: 300 });
+
+    runQuery.mockClear();
+    await queryCommand.run(["COPY INTO @STG FROM (SELECT * FROM T)"]);
+    expect(runQuery.mock.calls[0][1]).toMatchObject({ timeoutSeconds: 900 });
+  });
+
+  it("honors an explicit --timeout over the per-kind default", async () => {
+    runQuery.mockResolvedValue({ rows: [], total: 0 });
+    await queryCommand.run(["COPY INTO @STG FROM (SELECT * FROM T)", "--timeout", "120"]);
+    expect(runQuery.mock.calls[0][1]).toMatchObject({ timeoutSeconds: 120 });
+  });
+
   it("passes a one-off role switch through to the query", async () => {
     runQuery.mockResolvedValueOnce({ rows: [], total: 0 });
     await queryCommand.run(["SELECT 1", "--role", "OTHER_ROLE"]);

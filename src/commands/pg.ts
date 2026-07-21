@@ -272,9 +272,13 @@ function presentPgWrite(result: PgWriteResult, full: boolean): Record<string, un
   return out;
 }
 
+// Reads finish fast; a write (bulk DML, an index build) can outlast the read
+// default, so when --timeout is omitted a write gets the longer default.
+const PG_READ_TIMEOUT = 60;
+const PG_WRITE_TIMEOUT = 300;
+
 async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
-  const timeout = args.int("--timeout");
   const full = args.bool("--full");
   const forceWrite = args.bool("--write");
   const database = pgDatabase(args);
@@ -284,6 +288,9 @@ async function runQueryVerb(args: CommandArgs): Promise<Record<string, unknown>>
     throw new AxiError("No SQL provided", "VALIDATION_ERROR", ['Run `snowflake-axi pg query "SELECT ..."`']);
   }
   const { sql, kind } = classifyPgStatement(rawSql);
+  const isWrite = kind !== "read" || forceWrite;
+  const timeoutProvided = args.raw.some((arg) => arg === "--timeout" || arg.startsWith("--timeout="));
+  const timeout = timeoutProvided ? args.int("--timeout") : isWrite ? PG_WRITE_TIMEOUT : PG_READ_TIMEOUT;
 
   const elapsed = startTimer();
   // A SELECT/WITH that invokes a writing function or a data-modifying CTE reads
@@ -303,7 +310,7 @@ const WRITE_HINT = ['Run `snowflake-axi pg query "<sql>"`; a write runs once the
 export const pgCommand = defineCommand("pg", {
   summary: "Snowflake Postgres: tables, columns, samples, and SQL (reads free, writes via pg.write)",
   description:
-    "Snowflake Postgres explorer over a direct wire connection: reads run for free, writes go through `pg query` behind the pg.write grant",
+    "Snowflake Postgres explorer over a direct wire connection: reads run for free, writes go through `pg query` behind the pg.write grant (the connecting Postgres role stays the hard wall - pg.write is consent, not DDL/ownership over app-owned schemas)",
   defaultSubcommand: "tables",
   verbHints: {
     find: ["Run `snowflake-axi pg tables --like <name>` to search tables by name"],
@@ -395,7 +402,7 @@ export const pgCommand = defineCommand("pg", {
         "--timeout": {
           type: "int",
           placeholder: "<s>",
-          description: "statement timeout in seconds",
+          description: "statement timeout in seconds; when omitted, defaults to 60 for reads, 300 for writes",
           default: 60,
           min: 1,
           max: 3600,
@@ -406,7 +413,7 @@ export const pgCommand = defineCommand("pg", {
         "Reads (SELECT, WITH, TABLE, VALUES, SHOW, EXPLAIN) run on a server read-only session and need no grant.",
         "Any other statement is a write: refused with WRITE_NOT_ALLOWED until the user grants pg.write, then run on a read-write session that reports the command tag, `affected` count, and any RETURNING rows.",
         "A SELECT/WITH that actually writes - it calls a VOLATILE function or wraps a data-modifying CTE - reads by prefix and fails on the read-only session; pass --write to route it through the read-write session (needs pg.write). It then reports as a write (command tag, affected, returned rows).",
-        "Single statement only; the Postgres role's own privileges stay the hard boundary.",
+        "Single statement only. pg.write is consent, not privilege: the connecting Postgres role stays the hard wall - it may lack ownership/DDL on app-owned schemas (dimensions, facts), so a granted write can still be refused by the server.",
       ],
       examples: [
         'snowflake-axi pg query "SELECT count(*) FROM orders"',
