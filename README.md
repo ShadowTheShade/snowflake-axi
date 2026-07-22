@@ -61,8 +61,8 @@ Run `snowflake-axi <command> --help` for a command's flags and examples.
 | `find <pattern>` | Search tables and views by name across every database the roles can see |
 | `schema <table>` | Columns with types and nullability, plus row count and size |
 | `sample <table>` | Preview rows; `--fields`, `--where`, `--limit`, `--full` |
-| `query <sql>` | One statement; reads free, writes gated (below); `--limit`, `--full`, `--timeout`, `--warehouse`, `--role` |
-| `result <handle>` | Collect an earlier statement's output without re-running it |
+| `query <sql>` | One statement; reads free, writes gated (below); `--limit`, `--full`, `--timeout`, `--warehouse`, `--role`, `--async` |
+| `result <handle>` | Collect an earlier statement's output without re-running it (the collect side of `query --async`) |
 | `semantics [name]` | Semantic views: tables, metrics, dimensions, custom instructions, verified queries; `--like`, `--sql` |
 | `warehouses` | Warehouse states, 7-day credit burn, usage guidance; `--full` |
 

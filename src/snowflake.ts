@@ -84,26 +84,61 @@ async function withAuthRetry<T>(run: () => Promise<T>, role?: string): Promise<T
  * result metadata, so callers can report definitive totals without fetching
  * everything.
  */
-export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
+// Precedence: an explicit per-command --role, then SNOWFLAKE_ROLE from the
+// process env (pins one session without touching shared state), then the
+// persisted active role (`snowflake-axi role`), then the env-file default.
+function statementRequest(sqlText: string, options: QueryOptions): { role?: string; body: string } {
   const config = loadConfig();
-  // Precedence: an explicit per-command --role, then SNOWFLAKE_ROLE from the
-  // process env (pins one session without touching shared state), then the
-  // persisted active role (`snowflake-axi role`), then the env-file default.
   const role = options.role ?? processEnvRole() ?? readActiveRole() ?? config.role;
-  const body = JSON.stringify({
-    statement: sqlText,
+  return {
     role,
-    warehouse: options.warehouse,
-    database: config.database,
-    schema: config.schema,
-    timeout: options.timeoutSeconds,
-    bindings: toBindings(options.binds),
-  });
+    body: JSON.stringify({
+      statement: sqlText,
+      role,
+      warehouse: options.warehouse,
+      database: config.database,
+      schema: config.schema,
+      timeout: options.timeoutSeconds,
+      bindings: toBindings(options.binds),
+    }),
+  };
+}
 
+export async function runQuery(sqlText: string, options: QueryOptions = {}): Promise<QueryResult> {
+  const { role, body } = statementRequest(sqlText, options);
   return withAuthRetry(async () => {
     const { base, headers } = await requestContext(role);
     const response = await awaitResult(base, headers, await submit(base, headers, body));
     const payload = await parsePayload(response);
+    if (!response.ok) {
+      throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
+    }
+    return collectResult(base, headers, payload, options.maxRows);
+  }, role);
+}
+
+/**
+ * Submits a statement without waiting for it to finish: if the server hands
+ * back a running-statement handle (202, once the statement outruns the API's
+ * synchronous window), return it so the caller can collect later with
+ * `result <handle>` instead of blocking the whole run. A statement that
+ * finishes inside the window returns its result directly, like runQuery.
+ */
+export async function submitAsync(
+  sqlText: string,
+  options: QueryOptions = {},
+): Promise<QueryResult | RunningStatement> {
+  const { role, body } = statementRequest(sqlText, options);
+  return withAuthRetry(async () => {
+    const { base, headers } = await requestContext(role);
+    const response = await submit(base, headers, body);
+    const payload = await parsePayload(response);
+    if (response.status === 202) {
+      if (!payload.statementHandle) {
+        throw translateError(response.status, payload.message ?? "Snowflake accepted the statement but gave no handle");
+      }
+      return { running: true, handle: payload.statementHandle };
+    }
     if (!response.ok) {
       throw translateError(response.status, payload.message ?? `Snowflake returned HTTP ${response.status}`);
     }

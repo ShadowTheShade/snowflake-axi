@@ -3,7 +3,7 @@ import { type CommandArgs, defineCommand } from "../command.js";
 import { startTimer } from "../format.js";
 import { requireGrant } from "../grants.js";
 import { CELL_LIMIT, presentRows, presentWrite } from "../present.js";
-import { runQuery } from "../snowflake.js";
+import { runQuery, submitAsync } from "../snowflake.js";
 import { classifyStatement } from "../validate.js";
 
 // A COPY into/from a stage on a large fact routinely runs minutes, and other
@@ -34,14 +34,30 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   if (kind === "write") requireGrant("sql.write");
 
   const timeout = timeoutProvided(args.raw) ? args.int("--timeout") : defaultTimeout(kind, sql);
-
-  const elapsed = startTimer();
-  const result = await runQuery(sql, {
+  const queryOptions = {
     maxRows: limit,
     timeoutSeconds: timeout,
     warehouse: args.str("--warehouse"),
     role: args.str("--role"),
-  });
+  };
+
+  const elapsed = startTimer();
+  if (args.bool("--async")) {
+    const result = await submitAsync(sql, queryOptions);
+    if ("running" in result) {
+      return {
+        status: "running",
+        handle: result.handle,
+        elapsed: elapsed(),
+        help: [`Collect it once it finishes with \`snowflake-axi result ${result.handle}\``],
+      };
+    }
+    // The statement finished inside the API's synchronous window; report it like a normal run.
+    const presented = kind === "write" ? presentWrite(result, full) : presentRows(result, full);
+    return { ...presented, elapsed: elapsed() };
+  }
+
+  const result = await runQuery(sql, queryOptions);
   const presented = kind === "write" ? presentWrite(result, full) : presentRows(result, full);
   return { ...presented, elapsed: elapsed() };
 }
@@ -81,6 +97,11 @@ export const queryCommand = defineCommand("query", {
         placeholder: "<name>",
         description: "run this statement as another role granted to the user, instead of the default role",
       },
+      "--async": {
+        type: "boolean",
+        description:
+          "return a statement handle as soon as it is running instead of blocking to completion; collect it later with `result <handle>`",
+      },
     },
     notes: [
       "Unqualified table names resolve against the session's default namespace.",
@@ -88,11 +109,13 @@ export const queryCommand = defineCommand("query", {
       "Writes are refused with WRITE_NOT_ALLOWED until the user grants sql.write (see `snowflake-axi allow --help`); the role stays the hard boundary on what can change.",
       "Single statement only. A write reports Snowflake's count/status row; long statements print a handle to stderr for `snowflake-axi result <handle>`.",
       "The timeout default adapts when --timeout is omitted: 60s for reads, 300s for writes, 900s for a COPY (large unloads still may need a higher --timeout).",
+      "--async submits the statement and returns its handle without waiting, so a long COPY or backfill doesn't block; the statement keeps running server-side and `result <handle>` collects it (a short statement finishing right away returns its rows directly).",
     ],
     examples: [
       'snowflake-axi query "SELECT COUNT(*) FROM FCT_ORDERS"',
       'snowflake-axi query "SHOW SCHEMAS IN DATABASE SCOOPS_DB"',
       "snowflake-axi query \"UPDATE FCT_ORDERS SET STATUS = 'SHIPPED' WHERE ID = 42\"",
+      'snowflake-axi query --async "COPY INTO @STG FROM BIG_FACT"',
     ],
     run,
   },

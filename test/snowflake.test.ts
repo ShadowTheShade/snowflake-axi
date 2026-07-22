@@ -15,7 +15,7 @@ vi.mock("../src/config.js", async (importOriginal) => ({
   readActiveRole,
 }));
 
-import { fetchStatementResult, runQuery } from "../src/snowflake.js";
+import { fetchStatementResult, runQuery, submitAsync } from "../src/snowflake.js";
 
 const fetchMock = vi.fn();
 vi.stubGlobal("fetch", fetchMock);
@@ -351,5 +351,30 @@ describe("fetchStatementResult", () => {
       code: "SNOWFLAKE_ERROR",
       suggestions: [expect.stringContaining("24 hours")],
     });
+  });
+});
+
+describe("submitAsync", () => {
+  it("returns a running-statement handle when the server answers 202", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(202, { statementHandle: "async-h", statementStatusUrl: "/x" }));
+    const result = await submitAsync("COPY INTO @STG FROM BIG_FACT");
+    expect(fetchMock).toHaveBeenCalledTimes(1); // submit only, no polling
+    expect(result).toEqual({ running: true, handle: "async-h" });
+  });
+
+  it("returns rows directly when the statement finishes inside the window", async () => {
+    fetchMock.mockResolvedValueOnce(okResult());
+    const result = await submitAsync("SELECT 1");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect("running" in result).toBe(false);
+    expect((result as { rows: unknown[] }).rows).toEqual([
+      { A: "1", B: "x" },
+      { A: "2", B: null },
+    ]);
+  });
+
+  it("errors if a 202 carries no handle", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(202, { message: "no handle here" }));
+    await expect(submitAsync("SELECT 1")).rejects.toMatchObject({ code: expect.any(String) });
   });
 });
