@@ -2,7 +2,8 @@ import { AxiError } from "axi-sdk-js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runQuery = vi.hoisted(() => vi.fn());
-vi.mock("../src/snowflake.js", () => ({ runQuery }));
+const submitAsync = vi.hoisted(() => vi.fn());
+vi.mock("../src/snowflake.js", () => ({ runQuery, submitAsync }));
 
 const requireGrant = vi.hoisted(() => vi.fn());
 vi.mock("../src/grants.js", () => ({ requireGrant }));
@@ -11,6 +12,7 @@ import { queryCommand } from "../src/commands/query.js";
 
 beforeEach(() => {
   runQuery.mockReset();
+  submitAsync.mockReset();
   requireGrant.mockReset();
 });
 
@@ -113,5 +115,32 @@ describe("query command", () => {
 
   it("requires SQL", async () => {
     await expect(queryCommand.run([])).rejects.toBeInstanceOf(AxiError);
+  });
+
+  it("--async returns a running handle without blocking", async () => {
+    submitAsync.mockResolvedValueOnce({ running: true, handle: "01b6-abc" });
+    const output = (await queryCommand.run(["SELECT COUNT(*) FROM BIG", "--async"])) as Record<string, unknown>;
+    expect(runQuery).not.toHaveBeenCalled();
+    expect(output.status).toBe("running");
+    expect(output.handle).toBe("01b6-abc");
+    expect((output.help as string[])[0]).toContain("result 01b6-abc");
+  });
+
+  it("--async returns rows directly when the statement finishes in the window", async () => {
+    submitAsync.mockResolvedValueOnce({ rows: [{ N: "5" }], total: 1, numericColumns: new Set(["N"]) });
+    const output = (await queryCommand.run(["SELECT COUNT(*) AS N FROM T", "--async"])) as Record<string, unknown>;
+    expect(output.count).toBe("1 (complete)");
+    expect(output.rows).toEqual([{ N: 5 }]);
+    expect(output.handle).toBeUndefined();
+  });
+
+  it("--async still gates a write behind sql.write before submitting", async () => {
+    requireGrant.mockImplementation(() => {
+      throw new AxiError("Write capability 'sql.write' is not granted", "WRITE_NOT_ALLOWED", []);
+    });
+    await expect(queryCommand.run(["COPY INTO @STG FROM BIG", "--async"])).rejects.toMatchObject({
+      code: "WRITE_NOT_ALLOWED",
+    });
+    expect(submitAsync).not.toHaveBeenCalled();
   });
 });

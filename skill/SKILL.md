@@ -37,6 +37,7 @@ snowflake-axi schema MY_TABLE               # columns, types, row count, size
 snowflake-axi sample MY_TABLE --limit 3 --fields COL_A,COL_B
 snowflake-axi query "SELECT ..." --limit 50 # one statement; reads free, a write needs the sql.write grant
 snowflake-axi query "UPDATE <table> SET ..."          # write: refused until sql.write is granted
+snowflake-axi query --async "COPY INTO @STG FROM <table>"   # submit, return a handle; collect later with `result <handle>` (long COPY/backfill)
 snowflake-axi warehouses                    # states + 7-day credit burn + usage guidance
 snowflake-axi model my_model                # local dbt model SQL behind a table
 snowflake-axi dbt                           # dbt Projects on Snowflake, account-wide
