@@ -31,6 +31,10 @@ export const WRITE_CAPABILITIES: Record<string, { description: string; unlocks: 
     description: "Refresh a git repository from its origin (ALTER GIT REPOSITORY FETCH)",
     unlocks: "snowflake-axi git fetch <db.schema.repo>",
   },
+  "stage.write": {
+    description: "Copy files between stages and unload tables into a stage (COPY FILES / COPY INTO <stage>)",
+    unlocks: "snowflake-axi stage unload <table> <@db.schema.stage/path>",
+  },
   "sql.write": {
     description:
       "Run write statements through `query` over the Snowflake SQL API (anything that is not a SELECT/WITH/SHOW/DESC/EXPLAIN read); the role stays the hard boundary",

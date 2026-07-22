@@ -78,6 +78,7 @@ Run `snowflake-axi <command> --help` for a command's flags and examples.
 | `git [db[.schema]]` / `git branches <repo>` | List git repositories and their branches |
 | `git fetch <repo>` | Refresh a repository from origin; needs the `git.fetch` grant |
 | `stage <@stage>` / `stage read <@stage/file>` | List stage files; read staged records via a named file format |
+| `stage copy <@src> <@dst>` / `stage unload <table> <@dst>` | Copy files between stages; unload a table to a stage (write; `stage.write` grant) |
 
 **Snowflake Postgres**
 
@@ -112,7 +113,7 @@ Two independent layers keep everyday use read-only:
 2. `query` classifies each statement before any connection is made: a read (`SELECT`, `WITH`, `SHOW`, `DESC`, `DESCRIBE`, `EXPLAIN`) runs for free, and anything else is a write, refused unless `sql.write` is granted.
 
 There is no allow-list of write verbs: whatever the token's role can do, a granted `query` can do.
-The write commands - `query` and `pg query`, the local `dbt run`/`build`/`test`/`seed`/`snapshot`, and `dbt execute`/`deploy`/`drop` and `git fetch` - stay disabled until you opt in:
+The write commands - `query` and `pg query`, the local `dbt run`/`build`/`test`/`seed`/`snapshot`, `dbt execute`/`deploy`/`drop`, `git fetch`, and `stage copy`/`unload` - stay disabled until you opt in:
 
 - Until granted, the command fails loud with `WRITE_NOT_ALLOWED` and tells the agent to ask you in conversation.
 - After you agree, the agent runs `snowflake-axi allow <capability> --agent`; the harness permission prompt is your confirmation.
