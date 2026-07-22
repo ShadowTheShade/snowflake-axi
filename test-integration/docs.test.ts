@@ -110,6 +110,8 @@ describe("doc coverage (drift guard)", () => {
       ...[...README.matchAll(/`[^`]*?(--[a-z]+)[^`]*?`/g)].map((m) => m[1]),
     ]);
     documented.delete("--help");
+    // --json is a global switch handled in index.ts, not a per-command flag.
+    documented.delete("--json");
     for (const flag of documented) {
       expect(helpText, `docs mention ${flag} but no command help documents it`).toContain(flag);
     }

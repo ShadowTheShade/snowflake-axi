@@ -18,6 +18,7 @@ user-invocable: false
 
 Read-only Snowflake explorer, already on PATH.
 TOON output; errors are structured on stdout with a `code` and `help[]` suggestions.
+Append `--json` to any command to get the same result (and errors) as JSON instead - use it when piping into a parser (`jq`) rather than reading output.
 Exit codes: 0 success (including empty results), 1 error, 2 usage error.
 
 Run commands directly - do NOT start with `--help` or the bare command; the examples below are the discovery step.
