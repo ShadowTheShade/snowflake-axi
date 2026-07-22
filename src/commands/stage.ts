@@ -25,13 +25,19 @@ async function list(args: CommandArgs): Promise<Record<string, unknown>> {
   }
   const totalBytes = rows.reduce((sum, row) => sum + Number(row.size ?? 0), 0);
   const shown = rows.slice(0, limit);
+  const truncated = shown.length < rows.length;
   const help = [`Run \`snowflake-axi stage read ${path.replace(/\/+$/, "")}/<file> --limit 5\` to peek rows`];
-  if (shown.length < rows.length) {
+  if (truncated) {
     help.unshift(`Showing ${shown.length} of ${rows.length}; rerun with --limit ${rows.length} for all`);
   }
+  // When truncated the count leads with shown-of-total so a skim of `count`
+  // never reads the capped `files[]` array as the whole listing.
+  const count = truncated
+    ? `${shown.length} of ${rows.length} files shown, ${humanBytes(totalBytes)} total`
+    : `${rows.length} files, ${humanBytes(totalBytes)} total`;
   return {
     stage: path,
-    count: `${rows.length} files, ${humanBytes(totalBytes)} total`,
+    count,
     files: shown.map((row) => ({
       path: row.name,
       size: humanBytes(Number(row.size ?? 0)),

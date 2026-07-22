@@ -6,9 +6,24 @@ import { CELL_LIMIT, presentRows, presentWrite } from "../present.js";
 import { runQuery } from "../snowflake.js";
 import { classifyStatement } from "../validate.js";
 
+// A COPY into/from a stage on a large fact routinely runs minutes, and other
+// writes outlast a read; when --timeout is not given, pick a default matched to
+// the statement instead of the 60s read default so big unloads don't fail.
+const READ_TIMEOUT = 60;
+const WRITE_TIMEOUT = 300;
+const COPY_TIMEOUT = 900;
+
+function timeoutProvided(raw: string[]): boolean {
+  return raw.some((arg) => arg === "--timeout" || arg.startsWith("--timeout="));
+}
+
+function defaultTimeout(kind: string, sql: string): number {
+  if (kind !== "write") return READ_TIMEOUT;
+  return /^\s*COPY\b/i.test(sql) ? COPY_TIMEOUT : WRITE_TIMEOUT;
+}
+
 async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   const limit = args.int("--limit");
-  const timeout = args.int("--timeout");
   const full = args.bool("--full");
 
   const rawSql = args.positionals.join(" ").trim();
@@ -17,6 +32,8 @@ async function run(args: CommandArgs): Promise<Record<string, unknown>> {
   }
   const { sql, kind } = classifyStatement(rawSql);
   if (kind === "write") requireGrant("sql.write");
+
+  const timeout = timeoutProvided(args.raw) ? args.int("--timeout") : defaultTimeout(kind, sql);
 
   const elapsed = startTimer();
   const result = await runQuery(sql, {
@@ -48,7 +65,8 @@ export const queryCommand = defineCommand("query", {
       "--timeout": {
         type: "int",
         placeholder: "<s>",
-        description: "statement timeout in seconds",
+        description:
+          "statement timeout in seconds; when omitted, defaults to 60 for reads, 300 for writes, 900 for a COPY",
         default: 60,
         min: 1,
         max: 3600,
@@ -69,6 +87,7 @@ export const queryCommand = defineCommand("query", {
       "Reads (SELECT, WITH, SHOW, DESC, DESCRIBE, EXPLAIN) need no grant; any other statement is a write.",
       "Writes are refused with WRITE_NOT_ALLOWED until the user grants sql.write (see `snowflake-axi allow --help`); the role stays the hard boundary on what can change.",
       "Single statement only. A write reports Snowflake's count/status row; long statements print a handle to stderr for `snowflake-axi result <handle>`.",
+      "The timeout default adapts when --timeout is omitted: 60s for reads, 300s for writes, 900s for a COPY (large unloads still may need a higher --timeout).",
     ],
     examples: [
       'snowflake-axi query "SELECT COUNT(*) FROM FCT_ORDERS"',
