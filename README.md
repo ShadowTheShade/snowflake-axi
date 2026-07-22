@@ -12,7 +12,7 @@ Statements run over the Snowflake SQL API with a PAT as a bearer token - one sta
 ## Features
 
 - **Read-first by design.** Reads are always free; writes are refused until you grant them, MCP-style.
-- **Token-efficient output.** Compact [TOON](https://toonformat.dev/), minimal schemas, pre-computed aggregates (row counts and sizes without a scan), definitive empty states.
+- **Token-efficient output.** Compact [TOON](https://toonformat.dev/), minimal schemas, pre-computed aggregates (row counts and sizes without a scan), definitive empty states. Append `--json` to any command for machine-readable JSON (results and errors alike) when piping into a parser.
 - **Agent-ergonomic.** Structured errors with `code` and `help[]` next steps, fail-loud flags, and a content-first home view.
 - **Beyond raw SQL.** Semantic-view discovery, warehouse credit burn, staged-file peeks, dbt (on Snowflake and local), git repositories, and Snowflake Postgres - each as a focused command.
 
